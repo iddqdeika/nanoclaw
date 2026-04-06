@@ -24,7 +24,18 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
-    && rm -rf /var/lib/apt/lists/*
+    python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
+
+# MCP tool dir — on PATH for all users
+ENV UV_TOOL_DIR=/opt/uv-tools
+ENV PATH="/opt/uv-tools/bin:$PATH"
+
+# MCP servers — add new ones here. Separate layer so apt cache is not busted.
+RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install mcp-atlassian
+RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install mcp-grafana
+RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install mcp-clickhouse
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium

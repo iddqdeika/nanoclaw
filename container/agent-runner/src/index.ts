@@ -469,6 +469,9 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__atlassian__*',
+        'mcp__grafana__*',
+        'mcp__clickhouse__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -483,6 +486,39 @@ async function runQuery(
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
+        },
+        atlassian: {
+          command: 'mcp-atlassian',
+          args: [],
+          env: (() => {
+            try {
+              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
+            } catch {
+              return {};
+            }
+          })(),
+        },
+        grafana: {
+          command: 'mcp-grafana',
+          args: [],
+          env: (() => {
+            try {
+              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
+            } catch {
+              return {};
+            }
+          })(),
+        },
+        clickhouse: {
+          command: 'mcp-clickhouse',
+          args: [],
+          env: (() => {
+            try {
+              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
+            } catch {
+              return {};
+            }
+          })(),
         },
       },
       hooks: {
