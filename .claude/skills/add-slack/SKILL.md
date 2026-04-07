@@ -199,7 +199,7 @@ The Slack channel supports:
 
 ## Known Limitations
 
-- **Threads are flattened** — Threaded replies are delivered to the agent as regular channel messages. The agent sees them but has no awareness they originated in a thread. Responses always go to the channel, not back into the thread. Users in a thread will need to check the main channel for the bot's reply. Full thread-aware routing (respond in-thread) requires pipeline-wide changes: database schema, `NewMessage` type, `Channel.sendMessage` interface, and routing logic.
+- **Thread context window** — Thread-scoped context only includes messages within the current retrieval window (`MAX_MESSAGES_PER_PROMPT`). Very long threads may lose early context.
 - **No typing indicator** — Slack's Bot API does not expose a typing indicator endpoint. The `setTyping()` method is a no-op. Users won't see "bot is typing..." while the agent works.
 - **Message splitting is naive** — Long messages are split at a fixed 4000-character boundary, which may break mid-word or mid-sentence. A smarter split (on paragraph or sentence boundaries) would improve readability.
 - **No file/image handling** — The bot only processes text content. File uploads, images, and rich message blocks are not forwarded to the agent.

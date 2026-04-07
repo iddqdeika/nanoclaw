@@ -243,7 +243,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     triggerThreadId = missedMessages[missedMessages.length - 1]?.thread_id;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  // When triggered from a thread, scope context to that thread only.
+  // Include messages that are in the same thread (thread_id matches)
+  // or ARE the thread parent (message id matches the thread ts).
+  const contextMessages = triggerThreadId
+    ? missedMessages.filter(
+        (m) => m.thread_id === triggerThreadId || m.id === triggerThreadId,
+      )
+    : missedMessages;
+  const prompt = formatMessages(
+    contextMessages.length > 0 ? contextMessages : missedMessages,
+    TIMEZONE,
+  );
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.

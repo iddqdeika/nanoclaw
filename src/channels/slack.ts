@@ -34,7 +34,11 @@ export class SlackChannel implements Channel {
   private app: App;
   private botUserId: string | undefined;
   private connected = false;
-  private outgoingQueue: Array<{ jid: string; text: string; threadId?: string }> = [];
+  private outgoingQueue: Array<{
+    jid: string;
+    text: string;
+    threadId?: string;
+  }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
 
@@ -79,9 +83,8 @@ export class SlackChannel implements Channel {
 
       if (!msg.text) return;
 
-      // Threaded replies are flattened into the channel conversation.
-      // The agent sees them alongside channel-level messages; responses
-      // always go to the channel, not back into the thread.
+      // Thread-aware: replies go back into the originating thread.
+      // Top-level messages get a new thread (bot replies under the message).
 
       const jid = `slack:${msg.channel}`;
       const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
@@ -120,9 +123,9 @@ export class SlackChannel implements Channel {
         }
       }
 
-      // thread_ts is present on thread replies (differs from ts); absent on root messages.
-      const threadId =
-        msg.thread_ts && msg.thread_ts !== msg.ts ? msg.thread_ts : undefined;
+      // For thread replies, use the parent thread_ts.
+      // For top-level messages, use the message's own ts so the bot reply creates a thread.
+      const threadId = msg.thread_ts || msg.ts;
 
       this.opts.onMessage(jid, {
         id: msg.ts,
@@ -157,11 +160,15 @@ export class SlackChannel implements Channel {
     // Flush any messages queued before connection
     await this.flushOutgoingQueue();
 
-    // Sync channel names on startup
-    await this.syncChannelMetadata();
+    // Sync channel names on startup (non-blocking — don't hold up other channels)
+    this.syncChannelMetadata();
   }
 
-  async sendMessage(jid: string, text: string, threadId?: string): Promise<void> {
+  async sendMessage(
+    jid: string,
+    text: string,
+    threadId?: string,
+  ): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
