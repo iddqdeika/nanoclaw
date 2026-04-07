@@ -1,6 +1,5 @@
 import { App, LogLevel } from '@slack/bolt';
 import type { GenericMessageEvent, BotMessageEvent } from '@slack/types';
-
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
@@ -34,7 +33,7 @@ export class SlackChannel implements Channel {
   private app: App;
   private botUserId: string | undefined;
   private connected = false;
-  private outgoingQueue: Array<{ jid: string; text: string }> = [];
+  private outgoingQueue: Array<{ jid: string; text: string; threadId?: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
 
@@ -94,8 +93,7 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[jid]) return;
 
-      const isBotMessage =
-        !!msg.bot_id || msg.user === this.botUserId;
+      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
       let senderName: string;
       if (isBotMessage) {
@@ -113,10 +111,19 @@ export class SlackChannel implements Channel {
       let content = msg.text;
       if (this.botUserId && !isBotMessage) {
         const mentionPattern = `<@${this.botUserId}>`;
-        if (content.includes(mentionPattern) && !TRIGGER_PATTERN.test(content)) {
+        if (
+          content.includes(mentionPattern) &&
+          !TRIGGER_PATTERN.test(content)
+        ) {
           content = `@${ASSISTANT_NAME} ${content}`;
         }
       }
+
+      // thread_ts is present when the message is inside a thread.
+      // For the root message of a thread, thread_ts === ts; we only want
+      // to tag true threaded replies where thread_ts differs from ts.
+      const threadId =
+        msg.thread_ts && msg.thread_ts !== msg.ts ? msg.thread_ts : undefined;
 
       this.opts.onMessage(jid, {
         id: msg.ts,
@@ -127,6 +134,7 @@ export class SlackChannel implements Channel {
         timestamp,
         is_from_me: isBotMessage,
         is_bot_message: isBotMessage,
+        thread_id: threadId,
       });
     });
   }
@@ -142,10 +150,7 @@ export class SlackChannel implements Channel {
       this.botUserId = auth.user_id as string;
       logger.info({ botUserId: this.botUserId }, 'Connected to Slack');
     } catch (err) {
-      logger.warn(
-        { err },
-        'Connected to Slack but failed to get bot user ID',
-      );
+      logger.warn({ err }, 'Connected to Slack but failed to get bot user ID');
     }
 
     this.connected = true;
@@ -157,11 +162,11 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string, threadId?: string): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
-      this.outgoingQueue.push({ jid, text });
+      this.outgoingQueue.push({ jid, text, threadId });
       logger.info(
         { jid, queueSize: this.outgoingQueue.length },
         'Slack disconnected, message queued',
@@ -172,18 +177,23 @@ export class SlackChannel implements Channel {
     try {
       // Slack limits messages to ~4000 characters; split if needed
       if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          text,
+          ...(threadId ? { thread_ts: threadId } : {}),
+        });
       } else {
         for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: text.slice(i, i + MAX_MESSAGE_LENGTH),
+            ...(threadId ? { thread_ts: threadId } : {}),
           });
         }
       }
-      logger.info({ jid, length: text.length }, 'Slack message sent');
+      logger.info({ jid, length: text.length, threadId }, 'Slack message sent');
     } catch (err) {
-      this.outgoingQueue.push({ jid, text });
+      this.outgoingQueue.push({ jid, text, threadId });
       logger.warn(
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send Slack message, queued',
@@ -245,9 +255,7 @@ export class SlackChannel implements Channel {
     }
   }
 
-  private async resolveUserName(
-    userId: string,
-  ): Promise<string | undefined> {
+  private async resolveUserName(userId: string): Promise<string | undefined> {
     if (!userId) return undefined;
 
     const cached = this.userNameCache.get(userId);
@@ -278,9 +286,10 @@ export class SlackChannel implements Channel {
         await this.app.client.chat.postMessage({
           channel: channelId,
           text: item.text,
+          ...(item.threadId ? { thread_ts: item.threadId } : {}),
         });
         logger.info(
-          { jid: item.jid, length: item.text.length },
+          { jid: item.jid, length: item.text.length, threadId: item.threadId },
           'Queued Slack message sent',
         );
       }
