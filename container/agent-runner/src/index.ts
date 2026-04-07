@@ -61,6 +61,31 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+const trustLevel = process.env.NANOCLAW_TRUST_LEVEL || 'untrusted';
+
+const TOOLS_BY_TRUST: Record<string, string[]> = {
+  main: [
+    'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch', 'Task', 'TaskOutput', 'TaskStop',
+    'TeamCreate', 'TeamDelete', 'SendMessage', 'TodoWrite',
+    'ToolSearch', 'Skill', 'NotebookEdit',
+    'mcp__nanoclaw__*', 'mcp__atlassian__*',
+    'mcp__grafana__*', 'mcp__clickhouse__*',
+  ],
+  trusted: [
+    'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch', 'Task', 'TaskOutput', 'TaskStop',
+    'SendMessage', 'TodoWrite', 'ToolSearch', 'Skill', 'NotebookEdit',
+    'mcp__nanoclaw__*',
+  ],
+  untrusted: [
+    'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch',
+    'SendMessage', 'ToolSearch', 'Skill',
+    'mcp__nanoclaw__send_message', 'mcp__nanoclaw__list_tasks',
+  ],
+};
+
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
@@ -451,79 +476,41 @@ async function runQuery(
             append: globalClaudeMd,
           }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__atlassian__*',
-        'mcp__grafana__*',
-        'mcp__clickhouse__*',
-      ],
+      allowedTools: TOOLS_BY_TRUST[trustLevel] || TOOLS_BY_TRUST.untrusted,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-            NANOCLAW_THREAD_ID: containerInput.threadId || '',
+      mcpServers: (() => {
+        const readMcpSecrets = () => {
+          try {
+            return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
+          } catch {
+            return {};
+          }
+        };
+        const servers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
+          nanoclaw: {
+            command: 'node',
+            args: [mcpServerPath],
+            env: {
+              NANOCLAW_CHAT_JID: containerInput.chatJid,
+              NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+              NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+              NANOCLAW_THREAD_ID: containerInput.threadId || '',
+              NANOCLAW_TRUST_LEVEL: trustLevel,
+            },
           },
-        },
-        atlassian: {
-          command: 'mcp-atlassian',
-          args: [],
-          env: (() => {
-            try {
-              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
-            } catch {
-              return {};
-            }
-          })(),
-        },
-        grafana: {
-          command: 'mcp-grafana',
-          args: [],
-          env: (() => {
-            try {
-              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
-            } catch {
-              return {};
-            }
-          })(),
-        },
-        clickhouse: {
-          command: 'mcp-clickhouse',
-          args: [],
-          env: (() => {
-            try {
-              return JSON.parse(fs.readFileSync('/workspace/group/mcp-secrets.json', 'utf-8'));
-            } catch {
-              return {};
-            }
-          })(),
-        },
-      },
+        };
+        // External MCP servers are only available to main
+        if (trustLevel === 'main') {
+          const secrets = readMcpSecrets();
+          servers.atlassian = { command: 'mcp-atlassian', args: [], env: secrets };
+          servers.grafana = { command: 'mcp-grafana', args: [], env: secrets };
+          servers.clickhouse = { command: 'mcp-clickhouse', args: [], env: secrets };
+        }
+        return servers;
+      })(),
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },

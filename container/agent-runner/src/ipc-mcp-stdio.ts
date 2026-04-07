@@ -18,7 +18,9 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
-const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const trustLevel = process.env.NANOCLAW_TRUST_LEVEL || 'untrusted';
+const isMain = trustLevel === 'main';
+const isTrusted = trustLevel === 'trusted' || isMain;
 // Default thread context: the thread where the bot was addressed (if any).
 const defaultThreadId = process.env.NANOCLAW_THREAD_ID || undefined;
 

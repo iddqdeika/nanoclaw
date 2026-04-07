@@ -29,6 +29,20 @@ import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
+export type TrustLevel = 'main' | 'trusted' | 'untrusted';
+
+export function getTrustLevel(group: RegisteredGroup): TrustLevel {
+  if (group.isMain) return 'main';
+  if (group.containerConfig?.trusted) return 'trusted';
+  return 'untrusted';
+}
+
+const SKILL_TIERS: Record<TrustLevel, string[]> = {
+  main: ['core', 'trusted', 'admin'],
+  trusted: ['core', 'trusted'],
+  untrusted: ['core', 'untrusted'],
+};
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -167,15 +181,20 @@ function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
+  // Sync skills from container/skills/{tier}/ into each group's .claude/skills/
+  // Only tiers matching the group's trust level are copied
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
+  const trustLevel = getTrustLevel(group);
   if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+    for (const tier of SKILL_TIERS[trustLevel]) {
+      const tierSrc = path.join(skillsSrc, tier);
+      if (!fs.existsSync(tierSrc)) continue;
+      for (const skillDir of fs.readdirSync(tierSrc)) {
+        const srcDir = path.join(tierSrc, skillDir);
+        if (!fs.statSync(srcDir).isDirectory()) continue;
+        fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
+      }
     }
   }
   mounts.push({
@@ -245,11 +264,15 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  trustLevel: TrustLevel,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Pass trust level so agent-runner can apply tool/MCP restrictions
+  args.push('-e', `NANOCLAW_TRUST_LEVEL=${trustLevel}`);
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
@@ -308,7 +331,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const groupTrustLevel = getTrustLevel(group);
+  const containerArgs = buildContainerArgs(mounts, containerName, groupTrustLevel);
 
   logger.debug(
     {

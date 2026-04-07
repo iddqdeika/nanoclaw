@@ -168,6 +168,7 @@ export class SlackChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
+    _replyToMessageId?: string,
   ): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 

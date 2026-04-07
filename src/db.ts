@@ -163,6 +163,30 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+
+  // Backfill existing non-main groups as trusted (preserves current behavior)
+  try {
+    const rows = database
+      .prepare(
+        `SELECT jid, container_config FROM registered_groups WHERE is_main = 0`,
+      )
+      .all() as Array<{ jid: string; container_config: string | null }>;
+    for (const row of rows) {
+      const config = row.container_config
+        ? JSON.parse(row.container_config)
+        : {};
+      if (config.trusted === undefined) {
+        config.trusted = true;
+        database
+          .prepare(
+            `UPDATE registered_groups SET container_config = ? WHERE jid = ?`,
+          )
+          .run(JSON.stringify(config), row.jid);
+      }
+    }
+  } catch {
+    /* already migrated or no groups yet */
+  }
 }
 
 export function initDatabase(): void {

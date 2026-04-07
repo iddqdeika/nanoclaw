@@ -366,6 +366,7 @@ export class TelegramChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
+    _replyToMessageId?: string,
   ): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');

@@ -30,6 +30,7 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  trusted?: boolean; // Trusted groups get elevated access (default: false)
 }
 
 export interface RegisteredGroup {
@@ -87,7 +88,7 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string, threadId?: string): Promise<void>;
+  sendMessage(jid: string, text: string, threadId?: string, replyToMessageId?: string): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
