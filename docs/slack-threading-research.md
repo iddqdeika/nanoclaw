@@ -77,6 +77,46 @@ Strategy B complexity is only justified if you need the agent to make threading 
 
 ---
 
+## Problems Found During Implementation
+
+### PM2 log capture broken on Windows
+PM2 never writes to its log files (`logs/nanoclaw.log`, `logs/nanoclaw-error.log`, `~/.pm2/logs/nanoclaw-out.log`) on this Windows setup. Both stdout and stderr are always 0 bytes. This made debugging via `logger.*` and `process.stdout.write` impossible until the process was run directly with `node dist/index.js > /tmp/nanoclaw-out.log 2>&1`.
+
+**Workaround:** Stop PM2, run directly from terminal with output redirected to a file.
+
+### SQLite write inside Bolt event handler fails silently
+Attempting to open a second connection to `messages.db` from inside the Bolt event handler (via dynamic `import('better-sqlite3')`) fails with a lock error because the main process already holds the file open. The `try { } catch { /* ignore */ }` pattern masked this completely. Any debug write to the same DB file will silently fail.
+
+**Workaround:** Use a separate DB file in `os.tmpdir()`, or redirect stdout to a file and use `process.stdout.write`.
+
+### `fs.appendFileSync` / `fs.writeFileSync` never creates files from the event handler
+Multiple attempts to write debug files (`fs.appendFileSync`, `fs.writeFileSync`) with various path formats (relative, absolute, `C:/...`, `os.tmpdir()`) all silently failed when called from inside the Bolt Socket Mode event handler — even wrapped in try/catch with separate error logging. Root cause not fully determined. Same file writes work fine from other parts of the codebase.
+
+**Workaround:** Use `process.stdout.write` with stdout redirected to a file.
+
+### Compiled output was stale between restarts
+Several debugging rounds were inconclusive because PM2 was restarted without rebuilding (`npm run build`), so the process ran old compiled code. Debug lines added to `src/channels/slack.ts` were not present in `dist/channels/slack.ts`.
+
+**Always run `npm run build` before `pm2 restart nanoclaw`.**
+
+### `thread_ts` IS present in Socket Mode events
+Confirmed via direct stdout logging: Slack Socket Mode does deliver `thread_ts` on thread replies, exactly as documented. For a top-level message: `thread_ts=undefined`. For a thread reply: `thread_ts=<parent_ts>` (different from `ts`). The existing code logic `msg.thread_ts && msg.thread_ts !== msg.ts` is correct.
+
+### Migration `ALTER TABLE` didn't apply on early restarts
+The `thread_id` column migration in `createSchema()` didn't apply immediately after an initial restart (reason unclear — possibly the column was already partially applied or a DB connection timing issue). Had to apply manually:
+```bash
+node -e "const db=new(require('better-sqlite3'))('./store/messages.db'); db.exec('ALTER TABLE messages ADD COLUMN thread_id TEXT');"
+```
+
+### Zombie containers intercept messages after restart
+When PM2 is restarted, `cleanupOrphans()` has a race condition on Windows: the old container from the previous run may still be alive and accepting stdin, intercepting new messages before the new process can start a fresh container. Manual stop required:
+```bash
+docker ps --filter name=nanoclaw- -q | xargs -r docker stop
+```
+Run this before restarting nanoclaw to ensure a clean state.
+
+---
+
 ## Migration Risk
 
 The only non-trivial change is the DB schema. The `thread_id` column needs to be added to an existing database. Since NanoClaw already uses `ALTER TABLE ... ADD COLUMN` patterns for migrations (check `src/db.ts`), this is low risk — add the column as nullable with no default.
