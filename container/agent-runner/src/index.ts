@@ -322,11 +322,12 @@ function drainIpcInput(): string[] {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
+        try { fs.unlinkSync(filePath); } catch { /* already gone */ }
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
         }
       } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
         log(
           `Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`,
         );
