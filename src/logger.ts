@@ -1,5 +1,20 @@
+import fs from 'fs';
+import path from 'path';
+
 const LEVELS = { debug: 20, info: 30, warn: 40, error: 50, fatal: 60 } as const;
 type Level = keyof typeof LEVELS;
+
+// Under PM2 on Windows, process.stdout/stderr writes go through PM2's pipe
+// which frequently blocks or deadlocks, freezing the entire event loop and
+// killing all connections (Slack, Telegram, etc.) simultaneously.
+// When running under PM2, write directly to a log file instead.
+// Always write logs to a file. This prevents PM2's broken stdout pipe on Windows
+// from blocking the event loop (which kills Slack/Telegram connections).
+// Also write to stdout when running interactively (TTY).
+const LOG_FILE = path.join(process.cwd(), 'data', 'nanoclaw.log');
+fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+const logFd = fs.openSync(LOG_FILE, 'a');
+const isTty = process.stdout.isTTY;
 
 const COLORS: Record<Level, string> = {
   debug: '\x1b[34m',
@@ -47,15 +62,16 @@ function log(
 ): void {
   if (LEVELS[level] < threshold) return;
   const tag = `${COLORS[level]}${level.toUpperCase()}${level === 'fatal' ? FULL_RESET : RESET}`;
-  const stream = LEVELS[level] >= LEVELS.warn ? process.stderr : process.stdout;
-  if (typeof dataOrMsg === 'string') {
-    stream.write(
-      `[${ts()}] ${tag} (${process.pid}): ${MSG_COLOR}${dataOrMsg}${RESET}\n`,
-    );
-  } else {
-    stream.write(
-      `[${ts()}] ${tag} (${process.pid}): ${MSG_COLOR}${msg}${RESET}${formatData(dataOrMsg)}\n`,
-    );
+  const line =
+    typeof dataOrMsg === 'string'
+      ? `[${ts()}] ${tag} (${process.pid}): ${MSG_COLOR}${dataOrMsg}${RESET}\n`
+      : `[${ts()}] ${tag} (${process.pid}): ${MSG_COLOR}${msg}${RESET}${formatData(dataOrMsg)}\n`;
+
+  fs.writeSync(logFd, line);
+  if (isTty) {
+    const stream =
+      LEVELS[level] >= LEVELS.warn ? process.stderr : process.stdout;
+    stream.write(line);
   }
 }
 

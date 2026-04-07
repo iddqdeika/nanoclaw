@@ -90,7 +90,10 @@ export class TelegramChannel implements Channel {
       const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
       const resp = await fetch(fileUrl);
       if (!resp.ok) {
-        logger.warn({ fileId, status: resp.status }, 'Telegram file download failed');
+        logger.warn(
+          { fileId, status: resp.status },
+          'Telegram file download failed',
+        );
         return null;
       }
 
@@ -349,9 +352,9 @@ export class TelegramChannel implements Channel {
             { username: botInfo.username, id: botInfo.id },
             'Telegram bot connected',
           );
-          console.log(`\n  Telegram bot: @${botInfo.username}`);
-          console.log(
-            `  Send /chatid to the bot to get a chat's registration ID\n`,
+          logger.info(
+            { hint: `/chatid → get chat registration ID` },
+            `Telegram bot: @${botInfo.username}`,
           );
           resolve();
         },
