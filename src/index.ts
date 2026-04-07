@@ -215,6 +215,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // Determine thread context: reply in the thread where the bot was addressed.
+  let triggerThreadId: string | undefined;
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
@@ -225,6 +228,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
+
+    // Use the last trigger message's thread context
+    const lastTrigger = [...missedMessages]
+      .reverse()
+      .find(
+        (m) =>
+          triggerPattern.test(m.content.trim()) &&
+          (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+      );
+    triggerThreadId = lastTrigger?.thread_id;
+  } else {
+    // Main group / no-trigger: use the last message's thread context
+    triggerThreadId = missedMessages[missedMessages.length - 1]?.thread_id;
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -259,7 +275,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(group, prompt, chatJid, triggerThreadId, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -270,7 +286,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        await channel.sendMessage(chatJid, text, triggerThreadId);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -316,6 +332,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  threadId?: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -368,6 +385,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        threadId,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -678,21 +696,21 @@ async function main(): Promise<void> {
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),
-    sendMessage: async (jid, rawText) => {
+    sendMessage: async (jid, rawText, threadId) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) await channel.sendMessage(jid, text, threadId);
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, text, threadId) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, text, threadId);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

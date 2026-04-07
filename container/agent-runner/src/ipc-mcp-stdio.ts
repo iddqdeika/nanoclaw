@@ -19,6 +19,8 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+// Default thread context: the thread where the bot was addressed (if any).
+const defaultThreadId = process.env.NANOCLAW_THREAD_ID || undefined;
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -41,7 +43,7 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
+  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. On Slack: if thread_ts is provided (or a default thread context exists), the message is sent as a thread reply.",
   {
     text: z.string().describe('The message text to send'),
     sender: z
@@ -49,6 +51,12 @@ server.tool(
       .optional()
       .describe(
         'Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.',
+      ),
+    thread_ts: z
+      .string()
+      .optional()
+      .describe(
+        'Slack thread timestamp to reply into. Omit to use the default thread context (the thread where you were addressed), or pass a specific thread_ts to reply to a different thread.',
       ),
   },
   async (args) => {
@@ -59,6 +67,7 @@ server.tool(
       sender: args.sender || undefined,
       groupFolder,
       timestamp: new Date().toISOString(),
+      threadTs: args.thread_ts || defaultThreadId,
     };
 
     writeIpcFile(MESSAGES_DIR, data);
