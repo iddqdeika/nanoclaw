@@ -290,6 +290,87 @@ function cleanupOneshotWorkspaces(retentionDays: number): void {
 
 ---
 
+## Testing
+
+### Unit tests
+
+Test the mount builder and IPC handler without spawning containers:
+
+1. **Mount builder** — verify `buildVolumeMounts` (or the new oneshot variant) produces correct mounts per scope:
+   - `admin`: project root, store (read-only), global (read-write), parent folder, temp workspace
+   - `core`: global (read-only), parent folder, temp workspace
+   - `untrusted`: global (read-only), parent folder, temp workspace
+   - All scopes: parent group folder at `/workspace/parent` (read-write)
+
+2. **IPC handler** — verify `spawn_agent` action:
+   - Blocked for non-main groups
+   - Creates temp workspace directory
+   - Passes correct scope/prompt to container runner
+
+3. **Cleanup** — verify `cleanupOneshotWorkspaces`:
+   - Deletes folders older than retention period
+   - Keeps recent folders
+
+### Integration test (no channels needed)
+
+End-to-end test that spawns a real container, verifiable from the host:
+
+```bash
+node --import tsx scripts/test-oneshot.ts
+```
+
+The test script:
+
+```typescript
+// 1. Setup
+//    - Create a fake parent group folder: data/test-parent/
+//    - Write instructions: data/test-parent/task.md = "Summarize this"
+
+// 2. Spawn
+//    - Call spawnOneshotAgent() directly (imported from src/)
+//    - Prompt: "Read /workspace/parent/task.md, write a one-line summary to /workspace/parent/result.txt"
+//    - Scope: "core" (no DB needed)
+//    - parentGroupFolder: "data/test-parent"
+
+// 3. Wait for completion (await the promise)
+
+// 4. Verify
+//    - Assert data/test-parent/result.txt exists
+//    - Assert it contains non-empty text
+//    - Assert temp workspace data/oneshot/{id}/ was created
+
+// 5. Cleanup
+//    - Remove data/test-parent/
+//    - Remove data/oneshot/{id}/
+```
+
+Run this in CI or locally after implementation. No channels, no user, no chat — just host → container → file → verify.
+
+### CLI smoke test
+
+After `claw oneshot` is implemented:
+
+```bash
+# Basic: run a prompt, check exit code
+claw oneshot "echo hello" --scope core
+
+# Parent folder: write to parent, verify from host
+mkdir -p /tmp/test-parent
+claw oneshot "Write OK to /workspace/parent/result.txt" --scope core --parent /tmp/test-parent
+cat /tmp/test-parent/result.txt  # should contain "OK"
+rm -rf /tmp/test-parent
+```
+
+### Manual channel test
+
+After automated tests pass, verify from an actual chat:
+
+1. Send to main group: "spawn an agent to list files in your workspace and report back"
+2. Verify: one-shot spawns, progress appears in the same thread, result is delivered
+3. Check `data/oneshot/` for the temp workspace
+
+---
+
 ## Future Extensions
 
 - **Agent-to-agent**: One-shot agents spawning sub-agents (teams)
