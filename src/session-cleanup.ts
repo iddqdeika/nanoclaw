@@ -36,7 +36,11 @@ function cleanupOneshotWorkspaces(): void {
         if (stat.isDirectory() && stat.mtimeMs < cutoff) {
           fs.rmSync(dir, { recursive: true, force: true });
           // Also clean up the corresponding sessions dir
-          const sessionsDir = path.join(DATA_DIR, 'sessions', `oneshot-${entry}`);
+          const sessionsDir = path.join(
+            DATA_DIR,
+            'sessions',
+            `oneshot-${entry}`,
+          );
           if (fs.existsSync(sessionsDir)) {
             fs.rmSync(sessionsDir, { recursive: true, force: true });
           }
@@ -51,7 +55,10 @@ function cleanupOneshotWorkspaces(): void {
   }
 
   if (cleaned > 0) {
-    logger.info({ cleaned, retentionDays: ONESHOT_RETENTION_DAYS }, 'Cleaned up oneshot workspaces');
+    logger.info(
+      { cleaned, retentionDays: ONESHOT_RETENTION_DAYS },
+      'Cleaned up oneshot workspaces',
+    );
   }
 }
 

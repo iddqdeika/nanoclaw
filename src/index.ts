@@ -31,6 +31,7 @@ import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
+  stopContainer,
 } from './container-runtime.js';
 import {
   getAllChats,
@@ -509,6 +510,9 @@ async function spawnOneshotAgent(
   );
 
   // Fire-and-forget — don't block the caller
+  let oneshotContainerName = '';
+  let hadResult = false;
+
   runContainerAgent(
     group,
     {
@@ -520,28 +524,44 @@ async function spawnOneshotAgent(
       assistantName: ASSISTANT_NAME,
     },
     (proc, containerName) => {
+      oneshotContainerName = containerName;
       logger.info({ oneshotId, containerName }, 'One-shot container started');
     },
     async (output) => {
       if (output.result) {
-        const raw = typeof output.result === 'string'
-          ? output.result
-          : JSON.stringify(output.result);
+        hadResult = true;
+        const raw =
+          typeof output.result === 'string'
+            ? output.result
+            : JSON.stringify(output.result);
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         if (text) {
           await sendMessage(request.chatJid, text, request.threadId);
         }
+      } else if (hadResult && output.result === null) {
+        // Session-update marker after a result = query done, agent is idling.
+        // Stop the container after a short grace period.
+        setTimeout(() => {
+          logger.info({ oneshotId }, 'Stopping idle one-shot container');
+          try {
+            stopContainer(oneshotContainerName);
+          } catch {
+            // Container may have already exited
+          }
+        }, 5000);
       }
     },
     mounts,
-  ).then((output) => {
-    logger.info(
-      { oneshotId, status: output.status },
-      'One-shot agent completed',
-    );
-  }).catch((err) => {
-    logger.error({ oneshotId, err }, 'One-shot agent failed');
-  });
+  )
+    .then((output) => {
+      logger.info(
+        { oneshotId, status: output.status },
+        'One-shot agent completed',
+      );
+    })
+    .catch((err) => {
+      logger.error({ oneshotId, err }, 'One-shot agent failed');
+    });
 
   return oneshotId;
 }

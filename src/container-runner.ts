@@ -340,7 +340,12 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
 
   // Sessions dir with scoped skills
   const oneshotId = path.basename(config.oneshotDir);
-  const sessionsDir = path.join(DATA_DIR, 'sessions', `oneshot-${oneshotId}`, '.claude');
+  const sessionsDir = path.join(
+    DATA_DIR,
+    'sessions',
+    `oneshot-${oneshotId}`,
+    '.claude',
+  );
   fs.mkdirSync(sessionsDir, { recursive: true });
   const settingsFile = path.join(sessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
@@ -363,7 +368,11 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
   // Sync skills based on scope
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
   const skillsDst = path.join(sessionsDir, 'skills');
-  const trustLevel: TrustLevel = isAdmin ? 'main' : config.scope === 'untrusted' ? 'untrusted' : 'untrusted';
+  const trustLevel: TrustLevel = isAdmin
+    ? 'main'
+    : config.scope === 'untrusted'
+      ? 'untrusted'
+      : 'untrusted';
   if (fs.existsSync(skillsSrc)) {
     for (const tier of SKILL_TIERS[trustLevel]) {
       const tierSrc = path.join(skillsSrc, tier);
@@ -407,8 +416,18 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
   });
 
   // Agent-runner source (shared, recompiled on startup)
-  const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
-  const oneshotAgentRunnerDir = path.join(DATA_DIR, 'sessions', `oneshot-${oneshotId}`, 'agent-runner-src');
+  const agentRunnerSrc = path.join(
+    projectRoot,
+    'container',
+    'agent-runner',
+    'src',
+  );
+  const oneshotAgentRunnerDir = path.join(
+    DATA_DIR,
+    'sessions',
+    `oneshot-${oneshotId}`,
+    'agent-runner-src',
+  );
   if (fs.existsSync(agentRunnerSrc)) {
     const srcIndex = path.join(agentRunnerSrc, 'index.ts');
     const cachedIndex = path.join(oneshotAgentRunnerDir, 'index.ts');
@@ -501,7 +520,8 @@ export async function runContainerAgent(
     const groupMount = prebuiltMounts.find(
       (m) => m.containerPath === '/workspace/group',
     );
-    groupDir = groupMount?.hostPath || path.join(DATA_DIR, 'oneshot', 'unknown');
+    groupDir =
+      groupMount?.hostPath || path.join(DATA_DIR, 'oneshot', 'unknown');
   } else {
     groupDir = resolveGroupFolderPath(group.folder);
   }
@@ -511,7 +531,9 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const groupTrustLevel = prebuiltMounts
-    ? (input.isMain ? 'main' : 'untrusted')
+    ? input.isMain
+      ? 'main'
+      : 'untrusted'
     : getTrustLevel(group);
   const containerArgs = buildContainerArgs(
     mounts,

@@ -620,7 +620,9 @@ export async function processTaskIpc(
         break;
       }
       const scope =
-        data.scope === 'admin' || data.scope === 'core' || data.scope === 'untrusted'
+        data.scope === 'admin' ||
+        data.scope === 'core' ||
+        data.scope === 'untrusted'
           ? data.scope
           : 'admin';
 
@@ -634,7 +636,10 @@ export async function processTaskIpc(
         }
       }
       if (!chatJid) {
-        logger.warn({ sourceGroup }, 'spawn_agent: could not find chatJid for source group');
+        logger.warn(
+          { sourceGroup },
+          'spawn_agent: could not find chatJid for source group',
+        );
         break;
       }
 
