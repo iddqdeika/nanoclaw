@@ -722,6 +722,70 @@ server.tool(
   },
 );
 
+server.tool(
+  'spawn_agent',
+  `Spawn a one-shot agent in a separate container to handle a task in parallel. Main group only.
+The one-shot agent runs independently — you continue working while it executes.
+It can read/write your group folder via /workspace/parent/, so you can leave instructions or context there.
+Progress updates and results are sent to the current chat/thread.
+
+Scope determines what the one-shot can access:
+• "admin" — full access: messages.db (read-only), global memory (read-write), project root
+• "core" — basic access: global memory (read-only), web tools
+• "untrusted" — minimal access: global memory (read-only)
+
+Pick the minimum scope needed for the task.`,
+  {
+    prompt: z
+      .string()
+      .describe(
+        'What the agent should do. Include all necessary context. The agent can access /workspace/parent/ (your group folder) for shared files.',
+      ),
+    scope: z
+      .enum(['admin', 'core', 'untrusted'])
+      .default('admin')
+      .describe('Access level for the one-shot agent'),
+    timeout: z
+      .number()
+      .optional()
+      .describe(
+        'Timeout in milliseconds. Default: 3600000 (60 min). Use longer for research tasks.',
+      ),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can spawn one-shot agents.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const agentId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'spawn_agent',
+      prompt: args.prompt,
+      scope: args.scope,
+      timeout: args.timeout,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `One-shot agent queued (ID: ${agentId}). It will run in a separate container with "${args.scope}" scope. Progress updates will appear in this chat.`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

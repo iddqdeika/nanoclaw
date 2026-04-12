@@ -4,11 +4,13 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   DEFAULT_TRIGGER,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   MAX_MESSAGES_PER_PROMPT,
+  ONESHOT_DEFAULT_TIMEOUT,
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
@@ -19,6 +21,7 @@ import {
   getRegisteredChannelNames,
 } from './channels/registry.js';
 import {
+  buildOneshotMounts,
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
@@ -455,6 +458,94 @@ async function runAgent(
   }
 }
 
+export interface OneshotRequest {
+  prompt: string;
+  scope: 'admin' | 'core' | 'untrusted';
+  chatJid: string;
+  threadId?: string;
+  parentGroupFolder: string; // group folder name (e.g. 'telegram_main')
+  timeout?: number;
+}
+
+async function spawnOneshotAgent(
+  request: OneshotRequest,
+  sendMessage: (jid: string, text: string, threadId?: string) => Promise<void>,
+): Promise<string> {
+  const oneshotId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const oneshotDir = path.join(DATA_DIR, 'oneshot', oneshotId);
+  fs.mkdirSync(oneshotDir, { recursive: true });
+
+  const parentGroupDir = path.resolve(GROUPS_DIR, request.parentGroupFolder);
+  const parentIpcDir = path.resolve(DATA_DIR, 'ipc', request.parentGroupFolder);
+
+  const mounts = buildOneshotMounts({
+    oneshotDir,
+    parentGroupDir,
+    parentIpcDir,
+    scope: request.scope,
+  });
+
+  const rules = loadRules(request.scope === 'admin');
+  const finalPrompt = rules
+    ? `<system_rules>\n${rules}\n</system_rules>\n\n${request.prompt}`
+    : request.prompt;
+
+  const group: RegisteredGroup = {
+    name: `oneshot-${oneshotId}`,
+    folder: `oneshot-${oneshotId}`,
+    trigger: '',
+    added_at: new Date().toISOString(),
+    isMain: request.scope === 'admin',
+  };
+
+  logger.info(
+    {
+      oneshotId,
+      scope: request.scope,
+      parentGroup: request.parentGroupFolder,
+      chatJid: request.chatJid,
+    },
+    'Spawning one-shot agent',
+  );
+
+  // Fire-and-forget — don't block the caller
+  runContainerAgent(
+    group,
+    {
+      prompt: finalPrompt,
+      groupFolder: `oneshot-${oneshotId}`,
+      chatJid: request.chatJid,
+      isMain: request.scope === 'admin',
+      threadId: request.threadId,
+      assistantName: ASSISTANT_NAME,
+    },
+    (proc, containerName) => {
+      logger.info({ oneshotId, containerName }, 'One-shot container started');
+    },
+    async (output) => {
+      if (output.result) {
+        const raw = typeof output.result === 'string'
+          ? output.result
+          : JSON.stringify(output.result);
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        if (text) {
+          await sendMessage(request.chatJid, text, request.threadId);
+        }
+      }
+    },
+    mounts,
+  ).then((output) => {
+    logger.info(
+      { oneshotId, status: output.status },
+      'One-shot agent completed',
+    );
+  }).catch((err) => {
+    logger.error({ oneshotId, err }, 'One-shot agent failed');
+  });
+
+  return oneshotId;
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -762,6 +853,17 @@ async function main(): Promise<void> {
       for (const group of Object.values(registeredGroups)) {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
+    },
+    spawnAgent: (request: OneshotRequest) => {
+      const sendMsg = async (jid: string, text: string, threadId?: string) => {
+        const channel = findChannel(channels, jid);
+        if (!channel) {
+          logger.warn({ jid }, 'No channel for oneshot message');
+          return;
+        }
+        await channel.sendMessage(jid, text, threadId);
+      };
+      return spawnOneshotAgent(request, sendMsg);
     },
   });
   startSessionCleanup();

@@ -66,6 +66,14 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const ONESHOT_DEFAULT_TIMEOUT = parseInt(
+  process.env.ONESHOT_DEFAULT_TIMEOUT || '3600000',
+  10,
+); // 60 min default
+export const ONESHOT_RETENTION_DAYS = parseInt(
+  process.env.ONESHOT_RETENTION_DAYS || '7',
+  10,
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

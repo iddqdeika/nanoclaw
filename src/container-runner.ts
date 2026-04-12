@@ -66,10 +66,17 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
+export interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+export interface OneshotMountConfig {
+  oneshotDir: string; // Absolute path to temp workspace
+  parentGroupDir: string; // Absolute path to parent group folder
+  parentIpcDir: string; // Absolute path to parent IPC dir (shared)
+  scope: 'admin' | 'core' | 'untrusted';
 }
 
 function buildVolumeMounts(
@@ -276,6 +283,153 @@ function buildVolumeMounts(
   return mounts;
 }
 
+export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
+  const mounts: VolumeMount[] = [];
+  const projectRoot = process.cwd();
+  const isAdmin = config.scope === 'admin';
+
+  // Oneshot's own temp workspace
+  mounts.push({
+    hostPath: config.oneshotDir,
+    containerPath: '/workspace/group',
+    readonly: false,
+  });
+
+  // Parent group folder — enables collaborative workflows
+  mounts.push({
+    hostPath: config.parentGroupDir,
+    containerPath: '/workspace/parent',
+    readonly: false,
+  });
+
+  // Scope-based mounts
+  if (isAdmin) {
+    // Project root (read-only)
+    mounts.push({
+      hostPath: projectRoot,
+      containerPath: '/workspace/project',
+      readonly: true,
+    });
+    // Shadow .env
+    const envFile = path.join(projectRoot, '.env');
+    if (fs.existsSync(envFile)) {
+      mounts.push({
+        hostPath: '/dev/null',
+        containerPath: '/workspace/project/.env',
+        readonly: true,
+      });
+    }
+    // Store (read-only for oneshot — prevents parallel write corruption)
+    const storeDir = path.join(projectRoot, 'store');
+    mounts.push({
+      hostPath: storeDir,
+      containerPath: '/workspace/project/store',
+      readonly: true,
+    });
+  }
+
+  // Global memory — read-write for admin, read-only otherwise
+  const globalDir = path.join(GROUPS_DIR, 'global');
+  if (fs.existsSync(globalDir)) {
+    mounts.push({
+      hostPath: globalDir,
+      containerPath: '/workspace/global',
+      readonly: !isAdmin,
+    });
+  }
+
+  // Sessions dir with scoped skills
+  const oneshotId = path.basename(config.oneshotDir);
+  const sessionsDir = path.join(DATA_DIR, 'sessions', `oneshot-${oneshotId}`, '.claude');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const settingsFile = path.join(sessionsDir, 'settings.json');
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify(
+        {
+          env: {
+            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+  }
+
+  // Sync skills based on scope
+  const skillsSrc = path.join(projectRoot, 'container', 'skills');
+  const skillsDst = path.join(sessionsDir, 'skills');
+  const trustLevel: TrustLevel = isAdmin ? 'main' : config.scope === 'untrusted' ? 'untrusted' : 'untrusted';
+  if (fs.existsSync(skillsSrc)) {
+    for (const tier of SKILL_TIERS[trustLevel]) {
+      const tierSrc = path.join(skillsSrc, tier);
+      if (!fs.existsSync(tierSrc)) continue;
+      for (const skillDir of fs.readdirSync(tierSrc)) {
+        const srcDir = path.join(tierSrc, skillDir);
+        if (!fs.statSync(srcDir).isDirectory()) continue;
+        fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
+      }
+    }
+  }
+
+  // Also sync scoped skills (skills-admin / skills-untrusted)
+  const scopedSkillsSrc = path.join(
+    projectRoot,
+    'container',
+    isAdmin ? 'skills-admin' : 'skills-untrusted',
+  );
+  if (fs.existsSync(scopedSkillsSrc)) {
+    for (const skillDir of fs.readdirSync(scopedSkillsSrc)) {
+      const srcDir = path.join(scopedSkillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
+    }
+  }
+
+  mounts.push({
+    hostPath: sessionsDir,
+    containerPath: '/home/node/.claude',
+    readonly: false,
+  });
+
+  // Share parent group's IPC namespace (for send_message routing)
+  fs.mkdirSync(path.join(config.parentIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(config.parentIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(config.parentIpcDir, 'input'), { recursive: true });
+  mounts.push({
+    hostPath: config.parentIpcDir,
+    containerPath: '/workspace/ipc',
+    readonly: false,
+  });
+
+  // Agent-runner source (shared, recompiled on startup)
+  const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
+  const oneshotAgentRunnerDir = path.join(DATA_DIR, 'sessions', `oneshot-${oneshotId}`, 'agent-runner-src');
+  if (fs.existsSync(agentRunnerSrc)) {
+    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    const cachedIndex = path.join(oneshotAgentRunnerDir, 'index.ts');
+    const needsCopy =
+      !fs.existsSync(oneshotAgentRunnerDir) ||
+      !fs.existsSync(cachedIndex) ||
+      (fs.existsSync(srcIndex) &&
+        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    if (needsCopy) {
+      fs.cpSync(agentRunnerSrc, oneshotAgentRunnerDir, { recursive: true });
+    }
+  }
+  mounts.push({
+    hostPath: oneshotAgentRunnerDir,
+    containerPath: '/app/src',
+    readonly: false,
+  });
+
+  return mounts;
+}
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
@@ -337,17 +491,33 @@ export async function runContainerAgent(
   input: ContainerInput,
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  prebuiltMounts?: VolumeMount[],
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
-  const groupDir = resolveGroupFolderPath(group.folder);
+  let groupDir: string;
+  if (prebuiltMounts) {
+    // Oneshot: workspace is the first /workspace/group mount
+    const groupMount = prebuiltMounts.find(
+      (m) => m.containerPath === '/workspace/group',
+    );
+    groupDir = groupMount?.hostPath || path.join(DATA_DIR, 'oneshot', 'unknown');
+  } else {
+    groupDir = resolveGroupFolderPath(group.folder);
+  }
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = prebuiltMounts || buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const groupTrustLevel = getTrustLevel(group);
-  const containerArgs = buildContainerArgs(mounts, containerName, groupTrustLevel);
+  const groupTrustLevel = prebuiltMounts
+    ? (input.isMain ? 'main' : 'untrusted')
+    : getTrustLevel(group);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    groupTrustLevel,
+  );
 
   logger.debug(
     {

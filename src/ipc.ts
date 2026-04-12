@@ -3,7 +3,12 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  ONESHOT_DEFAULT_TIMEOUT,
+  TIMEZONE,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -23,6 +28,14 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  spawnAgent?: (request: {
+    prompt: string;
+    scope: 'admin' | 'core' | 'untrusted';
+    chatJid: string;
+    threadId?: string;
+    parentGroupFolder: string;
+    timeout?: number;
+  }) => Promise<string>;
 }
 
 let ipcWatcherRunning = false;
@@ -197,6 +210,8 @@ export async function processTaskIpc(
     scope?: string;
     content?: string;
     files?: Record<string, string>;
+    // For spawn_agent
+    timeout?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -585,6 +600,61 @@ export async function processTaskIpc(
       } else {
         logger.warn({ scope, name }, 'Skill directory not found for removal');
       }
+      break;
+    }
+
+    case 'spawn_agent': {
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized spawn_agent attempt blocked',
+        );
+        break;
+      }
+      if (!deps.spawnAgent) {
+        logger.warn('spawn_agent IPC received but spawnAgent dep not provided');
+        break;
+      }
+      if (!data.prompt || typeof data.prompt !== 'string') {
+        logger.warn({ data }, 'Invalid spawn_agent request — missing prompt');
+        break;
+      }
+      const scope =
+        data.scope === 'admin' || data.scope === 'core' || data.scope === 'untrusted'
+          ? data.scope
+          : 'admin';
+
+      // Find the originating group's chatJid and threadId
+      const groups = deps.registeredGroups();
+      let chatJid = '';
+      for (const [jid, g] of Object.entries(groups)) {
+        if (g.folder === sourceGroup) {
+          chatJid = jid;
+          break;
+        }
+      }
+      if (!chatJid) {
+        logger.warn({ sourceGroup }, 'spawn_agent: could not find chatJid for source group');
+        break;
+      }
+
+      deps
+        .spawnAgent({
+          prompt: data.prompt,
+          scope,
+          chatJid,
+          parentGroupFolder: sourceGroup,
+          timeout: data.timeout || ONESHOT_DEFAULT_TIMEOUT,
+        })
+        .then((oneshotId) => {
+          logger.info(
+            { oneshotId, sourceGroup, scope },
+            'One-shot agent spawned via IPC',
+          );
+        })
+        .catch((err) => {
+          logger.error({ err, sourceGroup }, 'Failed to spawn one-shot agent');
+        });
       break;
     }
 
