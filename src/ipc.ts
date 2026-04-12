@@ -158,6 +158,22 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
+function isValidScope(scope: unknown): scope is 'core' | 'admin' | 'untrusted' {
+  return scope === 'core' || scope === 'admin' || scope === 'untrusted';
+}
+
+function isValidName(name: unknown): name is string {
+  if (typeof name !== 'string' || !name) return false;
+  // No path traversal, no slashes, must start with alphanumeric
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);
+}
+
+function skillScopeDir(scope: 'core' | 'admin' | 'untrusted'): string {
+  const base = path.join(process.cwd(), 'container');
+  if (scope === 'core') return path.join(base, 'skills');
+  return path.join(base, `skills-${scope}`);
+}
+
 export async function processTaskIpc(
   data: {
     type: string;
@@ -177,6 +193,10 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For add_rule / remove_rule / add_skill / remove_skill
+    scope?: string;
+    content?: string;
+    files?: Record<string, string>;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -465,6 +485,108 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'add_rule': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized add_rule attempt blocked');
+        break;
+      }
+      const { scope, name, content } = data;
+      if (
+        !isValidScope(scope) ||
+        !isValidName(name) ||
+        typeof content !== 'string'
+      ) {
+        logger.warn({ data }, 'Invalid add_rule request');
+        break;
+      }
+      const rulesDir = path.join(process.cwd(), 'rules', scope);
+      fs.mkdirSync(rulesDir, { recursive: true });
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      fs.writeFileSync(
+        path.join(rulesDir, fileName),
+        content.slice(0, 65536),
+        'utf-8',
+      );
+      logger.info({ scope, name, sourceGroup }, 'Rule added via IPC');
+      break;
+    }
+
+    case 'remove_rule': {
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized remove_rule attempt blocked',
+        );
+        break;
+      }
+      const { scope, name } = data;
+      if (!isValidScope(scope) || !isValidName(name)) {
+        logger.warn({ data }, 'Invalid remove_rule request');
+        break;
+      }
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      const filePath = path.join(process.cwd(), 'rules', scope, fileName);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        logger.info({ scope, name, sourceGroup }, 'Rule removed via IPC');
+      } else {
+        logger.warn({ scope, name }, 'Rule file not found for removal');
+      }
+      break;
+    }
+
+    case 'add_skill': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized add_skill attempt blocked');
+        break;
+      }
+      const { scope, name, files } = data;
+      if (
+        !isValidScope(scope) ||
+        !isValidName(name) ||
+        typeof files !== 'object' ||
+        !files
+      ) {
+        logger.warn({ data }, 'Invalid add_skill request');
+        break;
+      }
+      const targetDir = path.join(skillScopeDir(scope), name);
+      fs.mkdirSync(targetDir, { recursive: true });
+      for (const [fileName, fileContent] of Object.entries(files)) {
+        if (!isValidName(fileName.replace(/\.[^.]+$/, ''))) continue;
+        fs.writeFileSync(
+          path.join(targetDir, fileName),
+          String(fileContent).slice(0, 65536),
+          'utf-8',
+        );
+      }
+      logger.info({ scope, name, sourceGroup }, 'Skill added via IPC');
+      break;
+    }
+
+    case 'remove_skill': {
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized remove_skill attempt blocked',
+        );
+        break;
+      }
+      const { scope, name } = data;
+      if (!isValidScope(scope) || !isValidName(name)) {
+        logger.warn({ data }, 'Invalid remove_skill request');
+        break;
+      }
+      const targetDir = path.join(skillScopeDir(scope), name);
+      if (fs.existsSync(targetDir)) {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+        logger.info({ scope, name, sourceGroup }, 'Skill removed via IPC');
+      } else {
+        logger.warn({ scope, name }, 'Skill directory not found for removal');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

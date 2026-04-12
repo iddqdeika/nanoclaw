@@ -197,6 +197,21 @@ function buildVolumeMounts(
       }
     }
   }
+
+  // Sync scoped skills: admin for main groups, untrusted for non-main groups
+  const scopedSkillsSrc = path.join(
+    process.cwd(),
+    'container',
+    isMain ? 'skills-admin' : 'skills-untrusted',
+  );
+  if (fs.existsSync(scopedSkillsSrc)) {
+    for (const skillDir of fs.readdirSync(scopedSkillsSrc)) {
+      const srcDir = path.join(scopedSkillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',

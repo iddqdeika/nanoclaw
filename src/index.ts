@@ -48,6 +48,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { loadRules } from './rules-loader.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -393,10 +394,15 @@ async function runAgent(
     : undefined;
 
   try {
+    const rules = loadRules(isMain);
+    const finalPrompt = rules
+      ? `<system_rules>\n${rules}\n</system_rules>\n\n${prompt}`
+      : prompt;
+
     const output = await runContainerAgent(
       group,
       {
-        prompt,
+        prompt: finalPrompt,
         sessionId,
         groupFolder: group.folder,
         chatJid,

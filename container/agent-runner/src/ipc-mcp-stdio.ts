@@ -514,6 +514,214 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'add_rule',
+  `Add or update a rule that is injected into agent prompts. Main group only.
+
+Scopes:
+- "core"      — applies to ALL groups
+- "admin"     — applies to main group only
+- "untrusted" — applies to non-main groups only
+
+Rules take effect on the next message (no restart needed). Name must be alphanumeric with hyphens/underscores. Use a descriptive name so rules are easy to identify and remove later.`,
+  {
+    scope: z
+      .enum(['core', 'admin', 'untrusted'])
+      .describe('Which groups this rule applies to'),
+    name: z
+      .string()
+      .describe('Rule name, e.g. "no-profanity" or "response-format"'),
+    content: z
+      .string()
+      .describe('The rule text in markdown. Keep concise and actionable.'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage rules.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'add_rule',
+      scope: args.scope,
+      name: args.name,
+      content: args.content,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Rule "${args.name}" added to scope "${args.scope}". Takes effect on next message.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'remove_rule',
+  'Remove a rule by name and scope. Main group only.',
+  {
+    scope: z
+      .enum(['core', 'admin', 'untrusted'])
+      .describe('Scope of the rule to remove'),
+    name: z.string().describe('Name of the rule to remove'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage rules.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'remove_rule',
+      scope: args.scope,
+      name: args.name,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Rule "${args.name}" removal requested from scope "${args.scope}".`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'add_skill',
+  `Add or update a skill (slash command) available to agents. Main group only.
+
+Scopes:
+- "core"      — available to ALL groups
+- "admin"     — available to main group only
+- "untrusted" — available to non-main groups only
+
+A skill is a directory containing at minimum a SKILL.md file. The skill becomes available on the next container start. Name must be alphanumeric with hyphens/underscores.
+
+SKILL.md frontmatter format:
+\`\`\`
+---
+name: skill-name
+description: One-line description shown in /capabilities
+---
+\`\`\``,
+  {
+    scope: z
+      .enum(['core', 'admin', 'untrusted'])
+      .describe('Which groups this skill is available to'),
+    name: z
+      .string()
+      .describe('Skill directory name, e.g. "my-skill"'),
+    files: z
+      .record(z.string(), z.string())
+      .describe(
+        'Map of filename to content. Must include "SKILL.md". Example: { "SKILL.md": "---\\nname: my-skill\\n---\\n# /my-skill\\n..." }',
+      ),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage skills.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!args.files['SKILL.md']) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'files must include "SKILL.md".',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'add_skill',
+      scope: args.scope,
+      name: args.name,
+      files: args.files,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Skill "${args.name}" added to scope "${args.scope}". Takes effect on next container start.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'remove_skill',
+  'Remove a skill by name and scope. Main group only. Takes effect on next container start.',
+  {
+    scope: z
+      .enum(['core', 'admin', 'untrusted'])
+      .describe('Scope of the skill to remove'),
+    name: z.string().describe('Name of the skill directory to remove'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage skills.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'remove_skill',
+      scope: args.scope,
+      name: args.name,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Skill "${args.name}" removal requested from scope "${args.scope}".`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
