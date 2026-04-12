@@ -44,7 +44,7 @@ A container that:
 
 ```
 mcp__nanoclaw__spawn_agent(
-  prompt: "Research all group activity from last week, write summary to /workspace/global/memory/weekly-report.md",
+  prompt: "Research all group activity from last week, write summary to /workspace/parent/weekly-report.md",
   scope: "admin",
   timeout: 600000
 )
@@ -52,7 +52,11 @@ mcp__nanoclaw__spawn_agent(
 
 The agent writes an IPC file. The host picks it up, spawns a container, and returns the one-shot ID immediately. The main agent continues working.
 
-Progress updates from the one-shot go to the same chat/thread where `spawn_agent` was called.
+The one-shot agent can:
+- Read/write the parent group's folder via `/workspace/parent/`
+- Send progress updates to the originating chat/thread via `send_message`
+
+The agent picks the scope based on what the task needs. Use `admin` for tasks that need the database or global memory writes, `core` for simple tasks.
 
 ### 2. CLI
 
@@ -88,25 +92,49 @@ Temporary folder at `data/oneshot/{id}/`:
 - Agent can create files, notes, scratch work here
 - Auto-deleted after `ONESHOT_RETENTION_DAYS` (default: 7)
 
+### Scope
+
+The spawning agent chooses the scope for the one-shot:
+
+| Scope | Rules | Skills | Store | Global memory | Project root |
+|-------|-------|--------|-------|--------------|-------------|
+| `admin` | core + admin | core + admin | Read-only | Read-write | Read-only |
+| `core` | core only | core only | No | Read-only | No |
+| `untrusted` | core + untrusted | core + untrusted | No | Read-only | No |
+
+The agent should pick the minimum scope needed for the task. For example:
+- Cross-group research (queries messages.db) → `admin`
+- Simple text analysis or web research → `core`
+- Task on behalf of an untrusted group → `untrusted`
+
 ### Mounts
 
-Same as a main-group container (admin scope):
+Base mounts (all scopes):
+- `/workspace/group` — one-shot's own temp workspace (read-write)
+- `/workspace/parent` — **parent group's folder** (read-write, see below)
+- `/workspace/global` — global memory (read-only; read-write for `admin`)
+- `/workspace/ipc` — IPC namespace (shared with parent group)
+- `/home/node/.claude` — sessions + scoped skills
+
+Additional mounts for `admin` scope:
 - `/workspace/project` — project root (read-only)
-- `/workspace/project/store` — SQLite DB (read-only for one-shots)
-- `/workspace/global` — global memory (read-write)
-- `/workspace/group` — temp workspace (read-write)
-- `/workspace/ipc` — IPC namespace (shared with originating group)
-- `/home/node/.claude` — sessions + skills
+- `/workspace/project/store` — SQLite DB (read-only)
 
-### Rules and Skills
+### Parent Group Access
 
-Loaded based on scope:
-- `admin` scope: core rules + admin rules, core skills + admin skills
-- `core` scope: core rules only, core skills only
+The one-shot mounts the **parent group's folder** at `/workspace/parent/`. This enables a step-by-step workflow:
+
+1. Parent agent writes instructions or context to its group folder (e.g. `/workspace/group/oneshot-task.md`)
+2. Parent spawns one-shot agent
+3. One-shot reads instructions from `/workspace/parent/oneshot-task.md`
+4. One-shot writes results back to `/workspace/parent/results/`
+5. Parent agent reads results from its own `/workspace/group/results/`
+
+Both the parent agent and the one-shot can read/write the parent group folder, enabling collaborative multi-step work.
 
 ### IPC Namespace
 
-One-shot agents share the IPC namespace of the **originating group**. This means:
+One-shot agents share the IPC namespace of the **parent group**. This means:
 - `send_message` sends to the originating chat/thread
 - The one-shot cannot register groups or manage tasks (prompt-level restriction, not enforced)
 
@@ -178,9 +206,9 @@ The sweep runs daily. Only the workspace folder is deleted — any files the age
 ```typescript
 {
   type: 'spawn_agent';
-  prompt: string;           // What the agent should do
-  scope?: 'admin' | 'core'; // Default: 'admin'
-  timeout?: number;          // Default: ONESHOT_DEFAULT_TIMEOUT (60 min)
+  prompt: string;                          // What the agent should do
+  scope?: 'admin' | 'core' | 'untrusted'; // Default: 'admin'
+  timeout?: number;                        // Default: ONESHOT_DEFAULT_TIMEOUT (60 min)
 }
 ```
 
@@ -189,7 +217,10 @@ Host-side handler:
 2. Generate ID: `{timestamp}-{random}`
 3. Create workspace: `data/oneshot/{id}/`
 4. Load rules for scope, prepend to prompt
-5. Build container mounts (same as main group, but workspace → temp folder, store → read-only)
+5. Build container mounts:
+   - Temp workspace → `/workspace/group`
+   - Parent group folder → `/workspace/parent` (read-write)
+   - Global memory, store, project root based on scope
 6. Spawn `runContainerAgent()` — fire-and-forget (don't await in IPC loop)
 7. Route streaming output to originating `chatJid` + `threadId`
 8. Log completion
@@ -199,7 +230,7 @@ Host-side handler:
 ```typescript
 server.tool('spawn_agent', '...', {
   prompt: z.string(),
-  scope: z.enum(['admin', 'core']).default('admin'),
+  scope: z.enum(['admin', 'core', 'untrusted']).default('admin'),
   timeout: z.number().optional(),
 }, async (args) => {
   // Write IPC file to TASKS_DIR
@@ -215,11 +246,17 @@ Reuses existing `ContainerInput`:
   prompt: finalPrompt,     // rules + user prompt
   groupFolder: `oneshot/${id}`,
   chatJid: chatJid,        // originating chat (for send_message routing)
-  isMain: true,            // admin scope → main-level access
+  isMain: scope === 'admin',
   threadId: threadId,      // originating thread
   assistantName: ASSISTANT_NAME,
 }
 ```
+
+### Volume mount builder
+
+The `buildVolumeMounts` function needs a new path for one-shot agents. Either:
+- A new `buildOneshotMounts(scope, parentGroupFolder)` function
+- Or extend `buildVolumeMounts` with an optional `parentGroupFolder` parameter that adds the `/workspace/parent` mount
 
 ### Cleanup logic
 
@@ -245,8 +282,10 @@ function cleanupOneshotWorkspaces(retentionDays: number): void {
 
 - **Main-only**: Only the main group can spawn one-shot agents (enforced at IPC level)
 - **No escalation**: One-shot agents cannot register groups, manage tasks, or spawn further one-shots (no IPC tasks directory for one-shots)
-- **Store access**: Read-only for one-shots (prevents accidental DB corruption from parallel writes)
-- **Workspace isolation**: Each one-shot gets its own temp folder — no cross-contamination
+- **Scope-based access**: Store and project root only available at `admin` scope. Agent chooses minimum needed scope.
+- **Store read-only**: Even at `admin` scope, store is read-only (prevents DB corruption from parallel writes)
+- **Parent folder access**: One-shot gets read-write access to the parent group's folder — this is intentional for collaborative workflows. The parent agent controls what's in its folder.
+- **Workspace isolation**: Each one-shot gets its own temp folder — no cross-contamination between one-shots
 - **Timeout enforced**: Hard timeout prevents runaway containers
 
 ---
