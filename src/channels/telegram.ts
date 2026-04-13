@@ -45,16 +45,113 @@ async function sendTelegramMessage(
   }
 }
 
+// Auto-recovery tuning
+const RECONNECT_BASE_DELAY_MS = 5_000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60_000; // 5 min cap
+const HEALTH_CHECK_INTERVAL_MS = 60_000; // ping getMe every minute
+const HEALTH_CHECK_FAILURES_BEFORE_RESTART = 3;
+
 export class TelegramChannel implements Channel {
   name = 'telegram';
 
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  private reconnectAttempt = 0;
+  private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private healthCheckFailures = 0;
+  private shuttingDown = false;
+  private restartScheduled = false;
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  /**
+   * Schedule a bot restart after a failure, with exponential backoff.
+   * Coalesces multiple concurrent failure signals into a single restart.
+   */
+  private scheduleRestart(reason: string): void {
+    if (this.shuttingDown || this.restartScheduled) return;
+    this.restartScheduled = true;
+
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** this.reconnectAttempt,
+      RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectAttempt++;
+
+    logger.warn(
+      { reason, delayMs: delay, attempt: this.reconnectAttempt },
+      'Telegram: scheduling bot restart',
+    );
+
+    setTimeout(() => {
+      this.restartScheduled = false;
+      this.restartBot(reason).catch((err) =>
+        logger.error({ err }, 'Telegram restart failed'),
+      );
+    }, delay);
+  }
+
+  /** Stop the current bot and start a fresh one. */
+  private async restartBot(reason: string): Promise<void> {
+    if (this.shuttingDown) return;
+    logger.info({ reason }, 'Telegram: restarting bot');
+
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
+
+    if (this.bot) {
+      try {
+        await this.bot.stop();
+      } catch (err) {
+        logger.warn({ err }, 'Telegram: stop during restart failed (ignoring)');
+      }
+      this.bot = null;
+    }
+
+    try {
+      await this.connect();
+      this.reconnectAttempt = 0; // Reset backoff on successful reconnect
+      this.healthCheckFailures = 0;
+      logger.info('Telegram: bot restarted successfully');
+    } catch (err) {
+      logger.error({ err }, 'Telegram: restart connect failed');
+      this.scheduleRestart('reconnect failed');
+    }
+  }
+
+  /**
+   * Periodic health check — calls getMe() to verify the bot is reachable.
+   * If it fails N times in a row, trigger a restart.
+   */
+  private startHealthCheck(): void {
+    if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
+    this.healthCheckTimer = setInterval(async () => {
+      if (!this.bot || this.shuttingDown) return;
+      try {
+        await this.bot.api.getMe();
+        this.healthCheckFailures = 0;
+      } catch (err) {
+        this.healthCheckFailures++;
+        logger.warn(
+          {
+            err: (err as Error).message,
+            failures: this.healthCheckFailures,
+          },
+          'Telegram: health check failed',
+        );
+        if (
+          this.healthCheckFailures >= HEALTH_CHECK_FAILURES_BEFORE_RESTART
+        ) {
+          this.scheduleRestart('health check failures');
+        }
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
   }
 
   /**
@@ -339,13 +436,32 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:location', (ctx) => storeMedia(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeMedia(ctx, '[Contact]'));
 
-    // Handle errors gracefully
+    // Handle errors gracefully — detect fatal vs recoverable errors
     this.bot.catch((err) => {
-      logger.error({ err: err.message }, 'Telegram bot error');
+      const msg = err.message || String(err);
+      logger.error({ err: msg }, 'Telegram bot error');
+
+      // 401 = invalid bot token, fatal — don't restart
+      if (/401|unauthorized/i.test(msg)) {
+        logger.fatal({ err: msg }, 'Telegram: bot token invalid, not restarting');
+        return;
+      }
+
+      // 409 = another instance polling. Schedule restart with delay so the
+      // other instance times out before we re-claim the connection.
+      if (/409|conflict|terminated by other/i.test(msg)) {
+        this.scheduleRestart('409 Conflict');
+        return;
+      }
+
+      // Network errors, 5xx — Grammy auto-retries, but if we see persistent
+      // errors the health check will catch it and trigger restart
     });
 
-    // Start polling — returns a Promise that resolves when started
-    return new Promise<void>((resolve) => {
+    // Start polling — returns a Promise that resolves when started.
+    // Run start() in the background so its rejection doesn't crash the host.
+    return new Promise<void>((resolve, reject) => {
+      let resolved = false;
       this.bot!.start({
         onStart: (botInfo) => {
           logger.info(
@@ -356,9 +472,26 @@ export class TelegramChannel implements Channel {
             { hint: `/chatid → get chat registration ID` },
             `Telegram bot: @${botInfo.username}`,
           );
+          this.startHealthCheck();
+          resolved = true;
           resolve();
         },
-      });
+      })
+        .then(() => {
+          // start() resolves when the polling loop exits — that means polling died
+          if (resolved && !this.shuttingDown) {
+            logger.warn('Telegram: polling loop exited unexpectedly');
+            this.scheduleRestart('polling loop exited');
+          }
+        })
+        .catch((err) => {
+          logger.error({ err: err.message }, 'Telegram bot.start() failed');
+          if (!resolved) {
+            reject(err);
+          } else if (!this.shuttingDown) {
+            this.scheduleRestart('start() rejected');
+          }
+        });
     });
   }
 
@@ -411,6 +544,11 @@ export class TelegramChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
+    this.shuttingDown = true;
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
+    }
     if (this.bot) {
       this.bot.stop();
       this.bot = null;

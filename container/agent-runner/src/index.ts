@@ -70,7 +70,7 @@ const TOOLS_BY_TRUST: Record<string, string[]> = {
     'TeamCreate', 'TeamDelete', 'SendMessage', 'TodoWrite',
     'ToolSearch', 'Skill', 'NotebookEdit',
     'mcp__nanoclaw__*', 'mcp__atlassian__*',
-    'mcp__grafana__*', 'mcp__clickhouse__*',
+    'mcp__grafana__*', 'mcp__clickhouse__*', 'mcp__gitlab__*',
   ],
   trusted: [
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -504,10 +504,11 @@ async function runQuery(
         };
         // External MCP servers are only available to main
         if (trustLevel === 'main') {
-          const secrets = readMcpSecrets();
+          const secrets = readMcpSecrets() as Record<string, string>;
           servers.atlassian = { command: 'mcp-atlassian', args: [], env: secrets };
           servers.grafana = { command: 'mcp-grafana', args: [], env: secrets };
           servers.clickhouse = { command: 'mcp-clickhouse', args: [], env: secrets };
+          servers.gitlab = { command: 'mcp-gitlab', args: [], env: secrets };
         }
         return servers;
       })(),

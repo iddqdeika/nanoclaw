@@ -41,8 +41,8 @@ RUN UV_TOOL_BIN_DIR=/usr/local/bin uv tool install mcp-clickhouse
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and GitLab MCP (stdio) globally
+RUN npm install -g agent-browser @anthropic-ai/claude-code @zereight/mcp-gitlab
 
 # Create app directory
 WORKDIR /app

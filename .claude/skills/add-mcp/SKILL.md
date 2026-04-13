@@ -206,6 +206,41 @@ atlassian: {
 
 ---
 
+## Example: GitLab (`@zereight/mcp-gitlab`)
+
+**Package:** `@zereight/mcp-gitlab` (stdio binary: `mcp-gitlab`)
+
+**Dockerfile addition** (with other global npm installs):
+
+```dockerfile
+RUN npm install -g agent-browser @anthropic-ai/claude-code @zereight/mcp-gitlab
+```
+
+**agent-runner `mcpServers`** (same `readMcpSecrets()` as Atlassian — merge GitLab keys into `groups/{folder}/mcp-secrets.json`):
+
+```typescript
+servers.gitlab = { command: 'mcp-gitlab', args: [], env: secrets };
+```
+
+**`allowedTools`:** `'mcp__gitlab__*'`
+
+**`mcp-secrets.json` keys** (see [environment variables](https://www.npmjs.com/package/@zereight/mcp-gitlab)):
+
+```json
+{
+  "GITLAB_PERSONAL_ACCESS_TOKEN": "glpat-...",
+  "GITLAB_API_URL": "https://gitlab.example.com/api/v4",
+  "GITLAB_READ_ONLY_MODE": "false",
+  "USE_GITLAB_WIKI": "false",
+  "USE_MILESTONE": "false",
+  "USE_PIPELINE": "false"
+}
+```
+
+Self-hosted instances must set `GITLAB_API_URL` to that instance’s API base (usually `https://<host>/api/v4`).
+
+---
+
 ## Debugging
 
 **MCP server not appearing as tools:**
