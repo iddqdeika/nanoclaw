@@ -46,16 +46,23 @@ The container cannot read the host `.env`. Three options, in order of preference
 
 #### Option A: Pre-install binary + secrets file (recommended)
 
-Put credentials in the group folder — it's mounted as `/workspace/group/` in the container:
+Put credentials in the group folder — it's mounted as `/workspace/group/` in the container.
+
+**IMPORTANT: which groups need the secrets file.** External MCPs are registered for `main` AND `trusted` trust levels (see `docs/trust-groups.md`). Both need their own `mcp-secrets.json`. Untrusted groups never get external MCP servers started, so no secrets file is needed there.
 
 ```bash
-# Write once per group that needs access
-cat > groups/telegram_main/mcp-secrets.json << 'EOF'
+# Copy to ALL main + trusted groups:
+for g in groups/slack_main groups/telegram_main groups/slack_dsp-resale-alarm; do
+  cat > "$g/mcp-secrets.json" << 'EOF'
 {
   "API_KEY": "...",
   "API_URL": "..."
 }
 EOF
+done
+
+# Or faster: if secrets are identical across groups, write once and copy:
+cp groups/slack_main/mcp-secrets.json groups/slack_<other-trusted-group>/mcp-secrets.json
 ```
 
 Read in agent-runner:
@@ -68,6 +75,20 @@ env: (() => {
     return {};
   }
 })(),
+```
+
+**When registering a new trusted group**: after `register_group(..., trusted: true)` succeeds, copy `mcp-secrets.json` into the new group's folder. Otherwise the MCP servers start but connect to defaults (e.g. Grafana falls back to `localhost:3000`) and fail silently.
+
+To find groups that are missing the secrets file:
+
+```bash
+for g in groups/*/; do
+  name=$(basename "$g")
+  trusted=$(sqlite3 store/messages.db "SELECT CASE WHEN is_main=1 THEN 'main' WHEN container_config LIKE '%\"trusted\":true%' THEN 'trusted' ELSE 'untrusted' END FROM registered_groups WHERE folder='$name' LIMIT 1;" 2>/dev/null)
+  if [ "$trusted" = "main" ] || [ "$trusted" = "trusted" ]; then
+    [ -f "$g/mcp-secrets.json" ] && echo "$name: ✓ ($trusted)" || echo "$name: MISSING ($trusted)"
+  fi
+done
 ```
 
 #### Option B: Hardcode (personal installs only)
@@ -151,9 +172,9 @@ rm -rf data/sessions/slack_main/agent-runner-src
 
 ## Full Checklist
 
-- [ ] MCP server added to `mcpServers` in `container/agent-runner/src/index.ts`
-- [ ] Tool pattern added to `allowedTools` (`mcp__servername__*`)
-- [ ] Credentials written to `groups/{group}/mcp-secrets.json` (one per group)
+- [ ] MCP server added to `mcpServers` in `container/agent-runner/src/index.ts` — registered for which trust levels?
+- [ ] Tool pattern added to `allowedTools` in `TOOLS_BY_TRUST` for every trust level that should get it (e.g. `mcp__servername__*` in `main` and `trusted` if external MCP)
+- [ ] **Credentials written to `groups/{group}/mcp-secrets.json` for every main AND trusted group** — missing file → MCP falls back to defaults (localhost) and fails silently
 - [ ] Binary pre-installed in `container/Dockerfile` (if uvx-based)
 - [ ] Docker image rebuilt: `./container/build.sh`
 - [ ] Agent-runner cache cleared: `touch container/agent-runner/src/index.ts && rm -rf data/sessions/*/agent-runner-src`
