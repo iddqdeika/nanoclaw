@@ -30,7 +30,7 @@ export interface IpcDeps {
   onTasksChanged: () => void;
   spawnAgent?: (request: {
     prompt: string;
-    scope: 'admin' | 'core' | 'untrusted';
+    scope: 'admin' | 'trusted' | 'untrusted';
     chatJid: string;
     threadId?: string;
     parentGroupFolder: string;
@@ -171,8 +171,15 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
-function isValidScope(scope: unknown): scope is 'core' | 'admin' | 'untrusted' {
-  return scope === 'core' || scope === 'admin' || scope === 'untrusted';
+type RuleTier = 'core' | 'trusted' | 'admin' | 'untrusted';
+
+function isValidScope(scope: unknown): scope is RuleTier {
+  return (
+    scope === 'core' ||
+    scope === 'trusted' ||
+    scope === 'admin' ||
+    scope === 'untrusted'
+  );
 }
 
 function isValidName(name: unknown): name is string {
@@ -181,10 +188,9 @@ function isValidName(name: unknown): name is string {
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);
 }
 
-function skillScopeDir(scope: 'core' | 'admin' | 'untrusted'): string {
-  const base = path.join(process.cwd(), 'container');
-  if (scope === 'core') return path.join(base, 'skills');
-  return path.join(base, `skills-${scope}`);
+/** Path to the tier subdirectory inside container/skills/ (all tiers unified). */
+function skillTierDir(tier: RuleTier): string {
+  return path.join(process.cwd(), 'container', 'skills', tier);
 }
 
 export async function processTaskIpc(
@@ -205,6 +211,7 @@ export async function processTaskIpc(
     folder?: string;
     trigger?: string;
     requiresTrigger?: boolean;
+    trusted?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
     // For add_rule / remove_rule / add_skill / remove_skill
     scope?: string;
@@ -484,12 +491,23 @@ export async function processTaskIpc(
         // Preserve isMain from the existing registration so IPC config
         // updates (e.g. adding additionalMounts) don't strip the flag.
         const existingGroup = registeredGroups[data.jid];
+        // Merge trusted flag into containerConfig. The top-level `trusted`
+        // field is a convenience for the MCP tool; it gets stored inside
+        // containerConfig.trusted (which is what getTrustLevel reads).
+        const containerConfig: RegisteredGroup['containerConfig'] =
+          data.containerConfig ??
+          existingGroup?.containerConfig ??
+          undefined;
+        const finalContainerConfig =
+          typeof data.trusted === 'boolean'
+            ? { ...(containerConfig ?? {}), trusted: data.trusted }
+            : containerConfig;
         deps.registerGroup(data.jid, {
           name: data.name,
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
-          containerConfig: data.containerConfig,
+          containerConfig: finalContainerConfig,
           requiresTrigger: data.requiresTrigger,
           isMain: existingGroup?.isMain,
         });
@@ -566,7 +584,7 @@ export async function processTaskIpc(
         logger.warn({ data }, 'Invalid add_skill request');
         break;
       }
-      const targetDir = path.join(skillScopeDir(scope), name);
+      const targetDir = path.join(skillTierDir(scope), name);
       fs.mkdirSync(targetDir, { recursive: true });
       for (const [fileName, fileContent] of Object.entries(files)) {
         if (!isValidName(fileName.replace(/\.[^.]+$/, ''))) continue;
@@ -593,7 +611,7 @@ export async function processTaskIpc(
         logger.warn({ data }, 'Invalid remove_skill request');
         break;
       }
-      const targetDir = path.join(skillScopeDir(scope), name);
+      const targetDir = path.join(skillTierDir(scope), name);
       if (fs.existsSync(targetDir)) {
         fs.rmSync(targetDir, { recursive: true, force: true });
         logger.info({ scope, name, sourceGroup }, 'Skill removed via IPC');
@@ -621,7 +639,7 @@ export async function processTaskIpc(
       }
       const scope =
         data.scope === 'admin' ||
-        data.scope === 'core' ||
+        data.scope === 'trusted' ||
         data.scope === 'untrusted'
           ? data.scope
           : 'admin';

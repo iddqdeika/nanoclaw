@@ -470,12 +470,18 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       .describe(
         'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
       ),
-    trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    trigger: z.string().describe('Trigger word (e.g., "@Goga")'),
     requiresTrigger: z
       .boolean()
       .optional()
       .describe(
         'Whether messages must start with the trigger word. Default: false (respond to all messages). Set to true for busy groups with many participants where you only want the agent to respond when explicitly mentioned.',
+      ),
+    trusted: z
+      .boolean()
+      .optional()
+      .describe(
+        'Trust level for the group. Default: false (untrusted — restricted rules, tools, and skills). Set to true only for groups you fully control and whose members should have elevated access (trusted rules + skills, task scheduling, subagents).',
       ),
   },
   async (args) => {
@@ -498,6 +504,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       folder: args.folder,
       trigger: args.trigger,
       requiresTrigger: args.requiresTrigger ?? false,
+      trusted: args.trusted ?? false,
       timestamp: new Date().toISOString(),
     };
 
@@ -526,7 +533,7 @@ Scopes:
 Rules take effect on the next message (no restart needed). Name must be alphanumeric with hyphens/underscores. Use a descriptive name so rules are easy to identify and remove later.`,
   {
     scope: z
-      .enum(['core', 'admin', 'untrusted'])
+      .enum(['core', 'trusted', 'admin', 'untrusted'])
       .describe('Which groups this rule applies to'),
     name: z
       .string()
@@ -572,7 +579,7 @@ server.tool(
   'Remove a rule by name and scope. Main group only.',
   {
     scope: z
-      .enum(['core', 'admin', 'untrusted'])
+      .enum(['core', 'trusted', 'admin', 'untrusted'])
       .describe('Scope of the rule to remove'),
     name: z.string().describe('Name of the rule to remove'),
   },
@@ -627,7 +634,7 @@ description: One-line description shown in /capabilities
 \`\`\``,
   {
     scope: z
-      .enum(['core', 'admin', 'untrusted'])
+      .enum(['core', 'trusted', 'admin', 'untrusted'])
       .describe('Which groups this skill is available to'),
     name: z
       .string()
@@ -687,7 +694,7 @@ server.tool(
   'Remove a skill by name and scope. Main group only. Takes effect on next container start.',
   {
     scope: z
-      .enum(['core', 'admin', 'untrusted'])
+      .enum(['core', 'trusted', 'admin', 'untrusted'])
       .describe('Scope of the skill to remove'),
     name: z.string().describe('Name of the skill directory to remove'),
   },
@@ -729,10 +736,10 @@ The one-shot agent runs independently — you continue working while it executes
 It can read/write your group folder via /workspace/parent/, so you can leave instructions or context there.
 Progress updates and results are sent to the current chat/thread.
 
-Scope determines what the one-shot can access:
-• "admin" — full access: messages.db (read-only), global memory (read-write), project root
-• "core" — basic access: global memory (read-only), web tools
-• "untrusted" — minimal access: global memory (read-only)
+Scope determines what the one-shot can access (matches the trust-group model):
+• "admin" — main-level: core + trusted + admin rules/skills, messages.db (ro), global memory (rw), project root
+• "trusted" — trusted-level: core + trusted rules/skills, global memory (ro), web tools
+• "untrusted" — untrusted-level: core + untrusted rules/skills, global memory (ro)
 
 Pick the minimum scope needed for the task.`,
   {
@@ -742,7 +749,7 @@ Pick the minimum scope needed for the task.`,
         'What the agent should do. Include all necessary context. The agent can access /workspace/parent/ (your group folder) for shared files.',
       ),
     scope: z
-      .enum(['admin', 'core', 'untrusted'])
+      .enum(['admin', 'trusted', 'untrusted'])
       .default('admin')
       .describe('Access level for the one-shot agent'),
     timeout: z

@@ -76,7 +76,7 @@ export interface OneshotMountConfig {
   oneshotDir: string; // Absolute path to temp workspace
   parentGroupDir: string; // Absolute path to parent group folder
   parentIpcDir: string; // Absolute path to parent IPC dir (shared)
-  scope: 'admin' | 'core' | 'untrusted';
+  scope: 'admin' | 'trusted' | 'untrusted';
 }
 
 function buildVolumeMounts(
@@ -205,20 +205,6 @@ function buildVolumeMounts(
     }
   }
 
-  // Sync scoped skills: admin for main groups, untrusted for non-main groups
-  const scopedSkillsSrc = path.join(
-    process.cwd(),
-    'container',
-    isMain ? 'skills-admin' : 'skills-untrusted',
-  );
-  if (fs.existsSync(scopedSkillsSrc)) {
-    for (const skillDir of fs.readdirSync(scopedSkillsSrc)) {
-      const srcDir = path.join(scopedSkillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -365,14 +351,15 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
     );
   }
 
-  // Sync skills based on scope
+  // Sync skills based on scope → trust level
   const skillsSrc = path.join(projectRoot, 'container', 'skills');
   const skillsDst = path.join(sessionsDir, 'skills');
-  const trustLevel: TrustLevel = isAdmin
-    ? 'main'
-    : config.scope === 'untrusted'
-      ? 'untrusted'
-      : 'untrusted';
+  const trustLevel: TrustLevel =
+    config.scope === 'admin'
+      ? 'main'
+      : config.scope === 'trusted'
+        ? 'trusted'
+        : 'untrusted';
   if (fs.existsSync(skillsSrc)) {
     for (const tier of SKILL_TIERS[trustLevel]) {
       const tierSrc = path.join(skillsSrc, tier);
@@ -382,20 +369,6 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
         if (!fs.statSync(srcDir).isDirectory()) continue;
         fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
       }
-    }
-  }
-
-  // Also sync scoped skills (skills-admin / skills-untrusted)
-  const scopedSkillsSrc = path.join(
-    projectRoot,
-    'container',
-    isAdmin ? 'skills-admin' : 'skills-untrusted',
-  );
-  if (fs.existsSync(scopedSkillsSrc)) {
-    for (const skillDir of fs.readdirSync(scopedSkillsSrc)) {
-      const srcDir = path.join(scopedSkillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
     }
   }
 

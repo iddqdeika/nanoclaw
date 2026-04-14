@@ -495,11 +495,7 @@ export class TelegramChannel implements Channel {
           //   2. Not shutting down
           //   3. This bot is still the "current" one — if restartBot replaced
           //      it, don't double-restart
-          if (
-            resolved &&
-            !this.shuttingDown &&
-            this.bot === capturedBot
-          ) {
+          if (resolved && !this.shuttingDown && this.bot === capturedBot) {
             logger.warn('Telegram: polling loop exited unexpectedly');
             this.scheduleRestart('polling loop exited');
           }

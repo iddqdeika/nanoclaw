@@ -23,6 +23,7 @@ import {
 import {
   buildOneshotMounts,
   ContainerOutput,
+  getTrustLevel,
   runContainerAgent,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -145,14 +146,23 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   // Copy CLAUDE.md template into the new group folder so agents have
-  // identity and instructions from the first run.  (Fixes #1391)
+  // identity and instructions from the first run.
+  // Template selection by trust level: main → main, trusted → global,
+  // untrusted → untrusted (security-restricted template).
   const groupMdFile = path.join(groupDir, 'CLAUDE.md');
   if (!fs.existsSync(groupMdFile)) {
-    const templateFile = path.join(
-      GROUPS_DIR,
-      group.isMain ? 'main' : 'global',
-      'CLAUDE.md',
-    );
+    const groupTrust = getTrustLevel(group);
+    const templateName =
+      groupTrust === 'main'
+        ? 'main'
+        : groupTrust === 'trusted'
+          ? 'global'
+          : 'untrusted';
+    let templateFile = path.join(GROUPS_DIR, templateName, 'CLAUDE.md');
+    // Fallback to global if untrusted template missing
+    if (!fs.existsSync(templateFile)) {
+      templateFile = path.join(GROUPS_DIR, 'global', 'CLAUDE.md');
+    }
     if (fs.existsSync(templateFile)) {
       let content = fs.readFileSync(templateFile, 'utf-8');
       if (ASSISTANT_NAME !== 'Andy') {
@@ -398,7 +408,7 @@ async function runAgent(
     : undefined;
 
   try {
-    const rules = loadRules(isMain);
+    const rules = loadRules(getTrustLevel(group));
     const finalPrompt = rules
       ? `<system_rules>\n${rules}\n</system_rules>\n\n${prompt}`
       : prompt;
@@ -461,7 +471,7 @@ async function runAgent(
 
 export interface OneshotRequest {
   prompt: string;
-  scope: 'admin' | 'core' | 'untrusted';
+  scope: 'admin' | 'trusted' | 'untrusted';
   chatJid: string;
   threadId?: string;
   parentGroupFolder: string; // group folder name (e.g. 'telegram_main')
@@ -486,7 +496,13 @@ async function spawnOneshotAgent(
     scope: request.scope,
   });
 
-  const rules = loadRules(request.scope === 'admin');
+  const oneshotTrustLevel =
+    request.scope === 'admin'
+      ? 'main'
+      : request.scope === 'trusted'
+        ? 'trusted'
+        : 'untrusted';
+  const rules = loadRules(oneshotTrustLevel);
   const finalPrompt = rules
     ? `<system_rules>\n${rules}\n</system_rules>\n\n${request.prompt}`
     : request.prompt;
