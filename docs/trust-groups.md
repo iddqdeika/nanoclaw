@@ -39,7 +39,7 @@ function getTrustLevel(group: RegisteredGroup): 'main' | 'trusted' | 'untrusted'
 | Manage rules/skills (`add_rule`, etc.) | Yes | No | No |
 | Spawn one-shot agents (`spawn_agent`) | Yes | No | No |
 | `mcp__nanoclaw__*` | All tools | All tools | send_message, list_tasks only |
-| External MCPs (Jira, Grafana, GitLab, etc.) | Yes | No | No |
+| External MCPs (Jira, Grafana, ClickHouse, GitLab) | Yes | Yes | No |
 | Rules loaded | core + trusted + admin | core + trusted | core + untrusted |
 | Skills loaded | core + trusted + admin | core + trusted | core + untrusted |
 | CLAUDE.md template | `groups/main/` | `groups/global/` | `groups/untrusted/` |
@@ -105,7 +105,9 @@ const TOOLS_BY_TRUST = {
 };
 ```
 
-MCP server selection: external MCPs (Atlassian, Grafana, ClickHouse, GitLab) are registered **only** when `trustLevel === 'main'`. Trusted and untrusted groups get only the built-in `nanoclaw` MCP.
+MCP server selection: external MCPs (Atlassian, Grafana, ClickHouse, GitLab) are registered for **main and trusted**. Untrusted groups get only the built-in `nanoclaw` MCP.
+
+Trusted groups read secrets from their own `groups/{folder}/mcp-secrets.json` — so different trusted groups can have different API tokens. Untrusted groups never get the file populated.
 
 The `ipc-mcp-stdio.ts` reads `NANOCLAW_TRUST_LEVEL` from env and sets `isMain` / `isTrusted` accordingly. Every privileged operation (register_group, add_rule, spawn_agent, etc.) guards on `isMain` or `isTrusted`.
 

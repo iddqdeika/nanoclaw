@@ -76,7 +76,8 @@ const TOOLS_BY_TRUST: Record<string, string[]> = {
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
     'WebSearch', 'WebFetch', 'Task', 'TaskOutput', 'TaskStop',
     'SendMessage', 'TodoWrite', 'ToolSearch', 'Skill', 'NotebookEdit',
-    'mcp__nanoclaw__*',
+    'mcp__nanoclaw__*', 'mcp__atlassian__*',
+    'mcp__grafana__*', 'mcp__clickhouse__*', 'mcp__gitlab__*',
   ],
   untrusted: [
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -502,8 +503,10 @@ async function runQuery(
             },
           },
         };
-        // External MCP servers are only available to main
-        if (trustLevel === 'main') {
+        // External MCP servers: main + trusted. Untrusted never sees them.
+        // Secrets still come from /workspace/group/mcp-secrets.json, which is
+        // only populated for main and trusted groups.
+        if (trustLevel === 'main' || trustLevel === 'trusted') {
           const secrets = readMcpSecrets() as Record<string, string>;
           servers.atlassian = { command: 'mcp-atlassian', args: [], env: secrets };
           servers.grafana = { command: 'mcp-grafana', args: [], env: secrets };
