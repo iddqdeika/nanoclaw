@@ -71,10 +71,10 @@ The host re-reads rule files every time it builds a prompt. No restart needed af
 
 ## Skills
 
-Directory layout (`container/skills/`):
+Directory layout (`skills/`):
 
 ```
-container/skills/
+skills/
   core/         # All trust levels (agent-browser, capabilities, slack-formatting, status)
   trusted/      # Main + trusted (daily-summary, nanoclaw-backlog)
   admin/        # Main only (manage-rules)
@@ -175,4 +175,4 @@ The important invariants:
 | `container/agent-runner/src/ipc-mcp-stdio.ts` | Exposes `register_group` (with `trusted` arg), all IPC-writer MCP tools; reads `NANOCLAW_TRUST_LEVEL` |
 | `groups/untrusted/CLAUDE.md` | Security-hardened identity template |
 | `rules/{core,trusted,admin,untrusted}/*.md` | Rule content |
-| `container/skills/{core,trusted,admin,untrusted}/` | Skill content |
+| `skills/{core,trusted,admin,untrusted}/` | Skill content |

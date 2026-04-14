@@ -188,9 +188,9 @@ function isValidName(name: unknown): name is string {
   return /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name);
 }
 
-/** Path to the tier subdirectory inside container/skills/ (all tiers unified). */
+/** Path to the tier subdirectory inside skills/ (all tiers unified). */
 function skillTierDir(tier: RuleTier): string {
-  return path.join(process.cwd(), 'container', 'skills', tier);
+  return path.join(process.cwd(), 'skills', tier);
 }
 
 export async function processTaskIpc(
@@ -495,9 +495,7 @@ export async function processTaskIpc(
         // field is a convenience for the MCP tool; it gets stored inside
         // containerConfig.trusted (which is what getTrustLevel reads).
         const containerConfig: RegisteredGroup['containerConfig'] =
-          data.containerConfig ??
-          existingGroup?.containerConfig ??
-          undefined;
+          data.containerConfig ?? existingGroup?.containerConfig ?? undefined;
         const finalContainerConfig =
           typeof data.trusted === 'boolean'
             ? { ...(containerConfig ?? {}), trusted: data.trusted }

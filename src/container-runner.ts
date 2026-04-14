@@ -188,9 +188,9 @@ function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/{tier}/ into each group's .claude/skills/
+  // Sync skills from skills/{tier}/ into each group's .claude/skills/
   // Only tiers matching the group's trust level are copied
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const skillsSrc = path.join(process.cwd(), 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   const trustLevel = getTrustLevel(group);
   if (fs.existsSync(skillsSrc)) {
@@ -352,7 +352,7 @@ export function buildOneshotMounts(config: OneshotMountConfig): VolumeMount[] {
   }
 
   // Sync skills based on scope → trust level
-  const skillsSrc = path.join(projectRoot, 'container', 'skills');
+  const skillsSrc = path.join(projectRoot, 'skills');
   const skillsDst = path.join(sessionsDir, 'skills');
   const trustLevel: TrustLevel =
     config.scope === 'admin'

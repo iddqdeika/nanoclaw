@@ -1,24 +1,27 @@
 ---
 name: add-rule-management
-description: Add scoped rule and skill management to NanoClaw. Enables adding/removing markdown rules and Claude Code skills per scope (core/admin/untrusted) from chat or Claude Code CLI.
+description: Add tier-scoped rule and skill management to NanoClaw. Enables adding/removing markdown rules and skills per tier (core/trusted/admin/untrusted) from chat or Claude Code CLI. Integrates with the trust-group model.
 ---
 
 # Add Rule Management
 
-Adds a three-scope rule and skill management system to NanoClaw:
+Adds a 4-tier rule and skill management system to NanoClaw:
 
-- **Rules** — markdown instruction files injected into agent prompts
+- **Rules** — markdown instruction files injected into agent prompts by the host
 - **Skills** — Claude Code slash-command directories synced to agents at container launch
 
-**Scopes:**
+**Tiers (loaded by trust level):**
 
-| Scope | Rules directory | Skills directory | Applies to |
-|-------|----------------|-----------------|------------|
-| `core` | `rules/core/` | `container/skills/` | All groups |
-| `admin` | `rules/admin/` | `container/skills-admin/` | Main group only |
-| `untrusted` | `rules/untrusted/` | `container/skills-untrusted/` | Non-main groups only |
+| Tier | Rules dir | Skills dir | Loaded for |
+|------|-----------|-----------|------------|
+| `core` | `rules/core/` | `skills/core/` | All trust levels |
+| `trusted` | `rules/trusted/` | `skills/trusted/` | main + trusted |
+| `admin` | `rules/admin/` | `skills/admin/` | main only |
+| `untrusted` | `rules/untrusted/` | `skills/untrusted/` | untrusted only |
 
-Only the main group can add or remove rules and skills (enforced at IPC level).
+Only the main group can add or remove rules and skills (enforced at IPC level). Trusted groups can read them but not modify.
+
+See `docs/trust-groups.md` for the full trust-group design.
 
 ---
 
@@ -127,7 +130,7 @@ Then change `prompt` to `finalPrompt` in the `runContainerAgent` call:
 
 ## Phase 5: Modify src/container-runner.ts
 
-Find the core skill sync block (search for `Sync skills from container/skills/`). Immediately after it, add the scoped skill sync:
+Find the core skill sync block (search for `Sync skills from skills/`). Immediately after it, add the scoped skill sync:
 
 ```typescript
   // Sync scoped skills: admin for main groups, untrusted for non-main groups
@@ -392,7 +395,7 @@ mcp__nanoclaw__remove_skill(scope, name)
 
 \`\`\`bash
 ls /workspace/project/rules/core/ /workspace/project/rules/admin/ /workspace/project/rules/untrusted/ 2>/dev/null
-ls /workspace/project/container/skills/ /workspace/project/container/skills-admin/ /workspace/project/container/skills-untrusted/ 2>/dev/null
+ls /workspace/project/skills/ /workspace/project/container/skills-admin/ /workspace/project/container/skills-untrusted/ 2>/dev/null
 \`\`\`
 
 ## Name rules
