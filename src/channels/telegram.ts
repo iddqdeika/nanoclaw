@@ -116,9 +116,17 @@ export class TelegramChannel implements Channel {
 
     try {
       await this.connect();
-      this.reconnectAttempt = 0; // Reset backoff on successful reconnect
       this.healthCheckFailures = 0;
       logger.info('Telegram: bot restarted successfully');
+      // Reset backoff only after bot stays stable for 5 min — otherwise
+      // transient failures reset the counter and we never back off enough
+      const stabilityTimer = setTimeout(() => {
+        if (this.bot && !this.shuttingDown) {
+          this.reconnectAttempt = 0;
+          logger.info('Telegram: bot stable, backoff reset');
+        }
+      }, 5 * 60_000);
+      stabilityTimer.unref?.();
     } catch (err) {
       logger.error({ err }, 'Telegram: restart connect failed');
       this.scheduleRestart('reconnect failed');
@@ -145,9 +153,7 @@ export class TelegramChannel implements Channel {
           },
           'Telegram: health check failed',
         );
-        if (
-          this.healthCheckFailures >= HEALTH_CHECK_FAILURES_BEFORE_RESTART
-        ) {
+        if (this.healthCheckFailures >= HEALTH_CHECK_FAILURES_BEFORE_RESTART) {
           this.scheduleRestart('health check failures');
         }
       }
@@ -443,7 +449,10 @@ export class TelegramChannel implements Channel {
 
       // 401 = invalid bot token, fatal — don't restart
       if (/401|unauthorized/i.test(msg)) {
-        logger.fatal({ err: msg }, 'Telegram: bot token invalid, not restarting');
+        logger.fatal(
+          { err: msg },
+          'Telegram: bot token invalid, not restarting',
+        );
         return;
       }
 
@@ -460,6 +469,9 @@ export class TelegramChannel implements Channel {
 
     // Start polling — returns a Promise that resolves when started.
     // Run start() in the background so its rejection doesn't crash the host.
+    // Capture the bot reference so when restartBot() replaces this.bot,
+    // the old start()'s resolution doesn't trigger another restart.
+    const capturedBot = this.bot;
     return new Promise<void>((resolve, reject) => {
       let resolved = false;
       this.bot!.start({
@@ -478,8 +490,16 @@ export class TelegramChannel implements Channel {
         },
       })
         .then(() => {
-          // start() resolves when the polling loop exits — that means polling died
-          if (resolved && !this.shuttingDown) {
+          // start() resolves when polling stops. Only restart if:
+          //   1. We got past onStart (resolved) — not an early failure
+          //   2. Not shutting down
+          //   3. This bot is still the "current" one — if restartBot replaced
+          //      it, don't double-restart
+          if (
+            resolved &&
+            !this.shuttingDown &&
+            this.bot === capturedBot
+          ) {
             logger.warn('Telegram: polling loop exited unexpectedly');
             this.scheduleRestart('polling loop exited');
           }
@@ -488,7 +508,7 @@ export class TelegramChannel implements Channel {
           logger.error({ err: err.message }, 'Telegram bot.start() failed');
           if (!resolved) {
             reject(err);
-          } else if (!this.shuttingDown) {
+          } else if (!this.shuttingDown && this.bot === capturedBot) {
             this.scheduleRestart('start() rejected');
           }
         });
