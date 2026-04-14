@@ -80,7 +80,13 @@ function escapeRegex(str: string): string {
 }
 
 export function buildTriggerPattern(trigger: string): RegExp {
-  return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
+  // Use a negative lookahead for word chars instead of \b so triggers ending
+  // in non-word chars (e.g. Slack mentions "<@U12345>") still match.
+  // Equivalent to \b when the trigger ends in a word char.
+  return new RegExp(
+    `^${escapeRegex(trigger.trim())}(?![a-zA-Z0-9_])`,
+    'i',
+  );
 }
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;
