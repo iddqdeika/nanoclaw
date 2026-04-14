@@ -1,7 +1,7 @@
 import { App, LogLevel } from '@slack/bolt';
 import type { GenericMessageEvent, BotMessageEvent } from '@slack/types';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME } from '../config.js';
 import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
@@ -109,19 +109,12 @@ export class SlackChannel implements Channel {
           'unknown';
       }
 
-      // Translate Slack <@UBOTID> mentions into TRIGGER_PATTERN format.
-      // Slack encodes @mentions as <@U12345>, which won't match TRIGGER_PATTERN
-      // (e.g., ^@<ASSISTANT_NAME>\b), so we prepend the trigger when the bot is @mentioned.
-      let content = msg.text;
-      if (this.botUserId && !isBotMessage) {
-        const mentionPattern = `<@${this.botUserId}>`;
-        if (
-          content.includes(mentionPattern) &&
-          !TRIGGER_PATTERN.test(content)
-        ) {
-          content = `@${ASSISTANT_NAME} ${content}`;
-        }
-      }
+      // Slack encodes @mentions as <@U12345>. Groups configured with
+      // <@BOT_ID> as the trigger match these natively. If you need the
+      // content-level trigger to be "@Name" text, configure the group
+      // trigger accordingly — no automatic prepending here (it breaks
+      // groups whose trigger IS the Slack mention ID).
+      const content = msg.text;
 
       // For thread replies, use the parent thread_ts.
       // For top-level messages, use the message's own ts so the bot reply creates a thread.
