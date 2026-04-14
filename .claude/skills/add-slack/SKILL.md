@@ -129,8 +129,34 @@ npx tsx setup/index.ts --step register -- --jid "slack:<channel-id>" --name "<ch
 For additional channels (trigger-only):
 
 ```bash
-npx tsx setup/index.ts --step register -- --jid "slack:<channel-id>" --name "<channel-name>" --folder "slack_<channel-name>" --trigger "@${ASSISTANT_NAME}" --channel slack
+npx tsx setup/index.ts --step register -- --jid "slack:<channel-id>" --name "<channel-name>" --folder "slack_<channel-name>" --trigger "<@BOT_USER_ID>" --channel slack
 ```
+
+### How Slack triggers work — important
+
+Slack stores `@mentions` in message bodies as the bot's **user ID** (e.g. `<@U0AGSQ3FM5K>`), not its display name. If you register a non-main channel with a plain-text trigger like `@goga`, it will **only fire when users type it as plain text** — if they pick the bot from Slack's mention dropdown, Slack converts it to `<@BOT_ID>` and the literal trigger doesn't match.
+
+**Use the bot's user ID as the trigger for non-main Slack channels.** Find it with:
+
+```bash
+curl -s -X POST "https://slack.com/api/auth.test" -H "Authorization: Bearer $SLACK_BOT_TOKEN" | node -e "
+let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+  const j = JSON.parse(d);
+  console.log('Bot user ID:', j.user_id);
+  console.log('Use as trigger: <@' + j.user_id + '>');
+});"
+```
+
+Then pass `--trigger "<@U0AGSQ3FM5K>"` (replace with the actual ID) when registering.
+
+**If the bot's user ID ever changes** (reinstall, workspace move), update stored triggers:
+
+```bash
+sqlite3 store/messages.db "UPDATE registered_groups SET trigger_pattern = '<@NEW_ID>' WHERE trigger_pattern = '<@OLD_ID>';"
+pm2 restart nanoclaw   # or systemctl --user restart nanoclaw
+```
+
+Main channels don't need a trigger (they respond to all messages) but still store one — any placeholder works.
 
 ## Phase 5: Verify
 
@@ -140,9 +166,10 @@ Tell the user:
 
 > Send a message in your registered Slack channel:
 > - For main channel: Any message works
-> - For non-main: `@<assistant-name> hello` (using the configured trigger word)
+> - For non-main: mention the bot using Slack's `@` picker (type `@` then select the bot), e.g. `@goga hello`. Slack converts this to the bot's user ID internally — this matches the stored `<@BOT_ID>` trigger.
 >
 > The bot should respond within a few seconds.
+> **Do not type a plain-text `@goga`** — Slack only converts it to a real mention when you pick the bot from the autocomplete dropdown. Without the dropdown, it stays as literal text and won't match the trigger.
 
 ### Check logs if needed
 
@@ -158,6 +185,25 @@ tail -f logs/nanoclaw.log
 2. Check channel is registered: `sqlite3 store/messages.db "SELECT * FROM registered_groups WHERE jid LIKE 'slack:%'"`
 3. For non-main channels: message must include trigger pattern
 4. Service is running: `launchctl list | grep nanoclaw`
+
+### Bot not responding in non-main channel despite seeing `@goga` in chat
+
+Slack renders bot mentions as `@goga` in the UI but stores them as `<@BOT_ID>` in the message body. Two common mismatches:
+
+- **Trigger stored as plain text `@goga`** but users pick the bot from the `@` dropdown → message body contains `<@BOT_ID>`, plain-text trigger doesn't match. Fix: update the trigger to `<@BOT_ID>` (see "How Slack triggers work" above).
+- **Trigger stored as `<@BOT_ID>`** but users type `@goga` as plain text (no dropdown pick) → message body contains literal `@goga`, mention-ID trigger doesn't match. Fix: tell users to use the `@` picker.
+
+Inspect actual message content:
+```bash
+sqlite3 store/messages.db "SELECT content FROM messages WHERE chat_jid = 'slack:<channel-id>' ORDER BY timestamp DESC LIMIT 5;"
+```
+
+And the stored trigger:
+```bash
+sqlite3 store/messages.db "SELECT trigger_pattern FROM registered_groups WHERE jid = 'slack:<channel-id>';"
+```
+
+The trigger must match the **start** of the message. A message like `@Andy <@BOT_ID> status` won't trigger — `@Andy` is before the mention.
 
 ### Bot connected but not receiving messages
 
