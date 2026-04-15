@@ -174,8 +174,44 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     }
   }
 
+  // Seed mcp-secrets.json for main/trusted groups so external MCPs have
+  // credentials immediately after registration/promotion. Copies from any
+  // existing main group's folder. Only writes if the target doesn't already
+  // have its own file — never overwrites intentional per-group overrides.
+  const groupTrustLevel = getTrustLevel(group);
+  const secretsFile = path.join(groupDir, 'mcp-secrets.json');
+  if (
+    (groupTrustLevel === 'main' || groupTrustLevel === 'trusted') &&
+    !fs.existsSync(secretsFile)
+  ) {
+    const sourceMainGroup = Object.values(registeredGroups).find(
+      (g) => g.isMain && g.folder !== group.folder,
+    );
+    if (sourceMainGroup) {
+      const sourceSecrets = path.join(
+        GROUPS_DIR,
+        sourceMainGroup.folder,
+        'mcp-secrets.json',
+      );
+      if (fs.existsSync(sourceSecrets)) {
+        try {
+          fs.copyFileSync(sourceSecrets, secretsFile);
+          logger.info(
+            { folder: group.folder, sourceFolder: sourceMainGroup.folder },
+            'Seeded mcp-secrets.json from main group',
+          );
+        } catch (err) {
+          logger.warn(
+            { folder: group.folder, err },
+            'Failed to seed mcp-secrets.json',
+          );
+        }
+      }
+    }
+  }
+
   logger.info(
-    { jid, name: group.name, folder: group.folder },
+    { jid, name: group.name, folder: group.folder, trust: groupTrustLevel },
     'Group registered',
   );
 }
