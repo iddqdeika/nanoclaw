@@ -48,3 +48,13 @@ done
 ## Name rules
 
 Names must match `[a-zA-Z0-9][a-zA-Z0-9._-]*` — no spaces, no slashes.
+
+## Registering / promoting groups
+
+Use `mcp__nanoclaw__register_group(jid, name, folder, trigger, trusted)` to register a new group or promote an existing one to trusted. Examples:
+
+- **New trusted group**: `register_group(..., trusted: true)` — the host auto-copies `mcp-secrets.json` from your main group's folder so external MCPs (Grafana, GitLab, Atlassian, ClickHouse) work immediately.
+- **Promote existing untrusted → trusted**: same call with the existing JID. If the group folder already has `mcp-secrets.json`, it is preserved (per-group overrides supported). If missing, it's seeded.
+- **Different credentials for a specific trusted group**: write `groups/{folder}/mcp-secrets.json` manually BEFORE calling `register_group(trusted: true)`, or edit it after. The seeding only runs when the file is absent.
+
+Untrusted groups never get external MCPs started, so they never need `mcp-secrets.json`.

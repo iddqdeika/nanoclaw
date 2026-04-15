@@ -48,22 +48,22 @@ The container cannot read the host `.env`. Three options, in order of preference
 
 Put credentials in the group folder — it's mounted as `/workspace/group/` in the container.
 
-**IMPORTANT: which groups need the secrets file.** External MCPs are registered for `main` AND `trusted` trust levels (see `docs/trust-groups.md`). Both need their own `mcp-secrets.json`. Untrusted groups never get external MCP servers started, so no secrets file is needed there.
+**Which groups need the secrets file:** `main` and `trusted` groups. Untrusted groups never get external MCP servers started.
+
+**Write the file once in your main group's folder:**
 
 ```bash
-# Copy to ALL main + trusted groups:
-for g in groups/slack_main groups/telegram_main groups/slack_dsp-resale-alarm; do
-  cat > "$g/mcp-secrets.json" << 'EOF'
+cat > groups/slack_main/mcp-secrets.json << 'EOF'
 {
   "API_KEY": "...",
   "API_URL": "..."
 }
 EOF
-done
-
-# Or faster: if secrets are identical across groups, write once and copy:
-cp groups/slack_main/mcp-secrets.json groups/slack_<other-trusted-group>/mcp-secrets.json
 ```
+
+**For trusted groups: the host auto-seeds the file on `register_group`.** When the main agent calls `mcp__nanoclaw__register_group(..., trusted: true)`, the host copies `mcp-secrets.json` from an existing main group's folder into the new/promoted group — if the target doesn't already have its own file. No manual copy needed.
+
+If you want a specific trusted group to use different credentials, write its `mcp-secrets.json` manually before `register_group` (or edit it after); the seed never overwrites existing files.
 
 Read in agent-runner:
 
@@ -77,16 +77,15 @@ env: (() => {
 })(),
 ```
 
-**When registering a new trusted group**: after `register_group(..., trusted: true)` succeeds, copy `mcp-secrets.json` into the new group's folder. Otherwise the MCP servers start but connect to defaults (e.g. Grafana falls back to `localhost:3000`) and fail silently.
-
-To find groups that are missing the secrets file:
+**Pre-existing trusted groups (registered before the auto-seed was added):** one-time backfill —
 
 ```bash
+SRC=groups/slack_main/mcp-secrets.json
 for g in groups/*/; do
   name=$(basename "$g")
-  trusted=$(sqlite3 store/messages.db "SELECT CASE WHEN is_main=1 THEN 'main' WHEN container_config LIKE '%\"trusted\":true%' THEN 'trusted' ELSE 'untrusted' END FROM registered_groups WHERE folder='$name' LIMIT 1;" 2>/dev/null)
-  if [ "$trusted" = "main" ] || [ "$trusted" = "trusted" ]; then
-    [ -f "$g/mcp-secrets.json" ] && echo "$name: ✓ ($trusted)" || echo "$name: MISSING ($trusted)"
+  trust=$(sqlite3 store/messages.db "SELECT CASE WHEN is_main=1 THEN 'main' WHEN container_config LIKE '%\"trusted\":true%' THEN 'trusted' ELSE 'untrusted' END FROM registered_groups WHERE folder='$name' LIMIT 1;" 2>/dev/null)
+  if { [ "$trust" = "main" ] || [ "$trust" = "trusted" ]; } && [ ! -f "$g/mcp-secrets.json" ]; then
+    cp "$SRC" "$g/mcp-secrets.json" && echo "seeded → $name"
   fi
 done
 ```
@@ -174,7 +173,8 @@ rm -rf data/sessions/slack_main/agent-runner-src
 
 - [ ] MCP server added to `mcpServers` in `container/agent-runner/src/index.ts` — registered for which trust levels?
 - [ ] Tool pattern added to `allowedTools` in `TOOLS_BY_TRUST` for every trust level that should get it (e.g. `mcp__servername__*` in `main` and `trusted` if external MCP)
-- [ ] **Credentials written to `groups/{group}/mcp-secrets.json` for every main AND trusted group** — missing file → MCP falls back to defaults (localhost) and fails silently
+- [ ] Credentials written to your **main** group's `mcp-secrets.json` — new trusted groups auto-seed from here on `register_group`
+- [ ] For pre-existing trusted groups registered before auto-seed: run the one-time backfill loop above
 - [ ] Binary pre-installed in `container/Dockerfile` (if uvx-based)
 - [ ] Docker image rebuilt: `./container/build.sh`
 - [ ] Agent-runner cache cleared: `touch container/agent-runner/src/index.ts && rm -rf data/sessions/*/agent-runner-src`
