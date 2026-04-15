@@ -62,10 +62,18 @@ server.tool(
       ),
   },
   async (args) => {
+    // One-shot agents (folder starts with "oneshot-") auto-tag their
+    // messages so the parent agent can distinguish them from its own
+    // previous replies when reading chat history.
+    const isOneshot = groupFolder.startsWith('oneshot-');
+    const text = isOneshot
+      ? `🤖 [oneshot:${groupFolder.slice('oneshot-'.length)}] ${args.sender ? `(${args.sender}) ` : ''}${args.text}`
+      : args.text;
+
     const data: Record<string, string | undefined> = {
       type: 'message',
       chatJid,
-      text: args.text,
+      text,
       sender: args.sender || undefined,
       groupFolder,
       timestamp: new Date().toISOString(),

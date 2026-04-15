@@ -588,7 +588,11 @@ async function spawnOneshotAgent(
             : JSON.stringify(output.result);
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         if (text) {
-          await sendMessage(request.chatJid, text, request.threadId);
+          // Prefix with identity so main agent can distinguish one-shot
+          // output from its own previous messages when reading chat history.
+          // Format is stable and parseable: "🤖 [oneshot:{id}]\n\n{body}".
+          const tagged = `🤖 [oneshot:${oneshotId}]\n\n${text}`;
+          await sendMessage(request.chatJid, tagged, request.threadId);
         }
       } else if (hadResult && output.result === null) {
         // Session-update marker after a result = query done, agent is idling.
