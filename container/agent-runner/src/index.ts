@@ -70,14 +70,16 @@ const TOOLS_BY_TRUST: Record<string, string[]> = {
     'TeamCreate', 'TeamDelete', 'SendMessage', 'TodoWrite',
     'ToolSearch', 'Skill', 'NotebookEdit',
     'mcp__nanoclaw__*', 'mcp__atlassian__*',
-    'mcp__grafana__*', 'mcp__clickhouse__*', 'mcp__gitlab__*',
+    'mcp__grafana__*', 'mcp__grafana2__*',
+    'mcp__clickhouse__*', 'mcp__gitlab__*',
   ],
   trusted: [
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
     'WebSearch', 'WebFetch', 'Task', 'TaskOutput', 'TaskStop',
     'SendMessage', 'TodoWrite', 'ToolSearch', 'Skill', 'NotebookEdit',
     'mcp__nanoclaw__*', 'mcp__atlassian__*',
-    'mcp__grafana__*', 'mcp__clickhouse__*', 'mcp__gitlab__*',
+    'mcp__grafana__*', 'mcp__grafana2__*',
+    'mcp__clickhouse__*', 'mcp__gitlab__*',
   ],
   untrusted: [
     'Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -509,7 +511,39 @@ async function runQuery(
         if (trustLevel === 'main' || trustLevel === 'trusted') {
           const secrets = readMcpSecrets() as Record<string, string>;
           servers.atlassian = { command: 'mcp-atlassian', args: [], env: secrets };
-          servers.grafana = { command: 'mcp-grafana', args: [], env: secrets };
+          // Two Grafana instances, named by subdomain:
+          //   grafana  → https://grafana.wpu.sh  (GRAFANA_URL / GRAFANA_TOKEN)
+          //   grafana2 → https://grafana2.wpu.sh (GRAFANA2_URL / GRAFANA2_TOKEN)
+          // mcp-grafana reads GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN/GRAFANA_API_KEY
+          // at startup, so we wrap per instance.
+          if (secrets.GRAFANA_URL) {
+            servers.grafana = {
+              command: 'mcp-grafana',
+              args: [],
+              env: {
+                GRAFANA_URL: secrets.GRAFANA_URL,
+                GRAFANA_SERVICE_ACCOUNT_TOKEN:
+                  secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN || secrets.GRAFANA_TOKEN || '',
+                GRAFANA_API_KEY:
+                  secrets.GRAFANA_API_KEY || secrets.GRAFANA_TOKEN || '',
+              },
+            };
+          }
+          if (secrets.GRAFANA2_URL) {
+            servers.grafana2 = {
+              command: 'mcp-grafana',
+              args: [],
+              env: {
+                GRAFANA_URL: secrets.GRAFANA2_URL,
+                GRAFANA_SERVICE_ACCOUNT_TOKEN:
+                  secrets.GRAFANA2_SERVICE_ACCOUNT_TOKEN ||
+                  secrets.GRAFANA2_TOKEN ||
+                  '',
+                GRAFANA_API_KEY:
+                  secrets.GRAFANA2_API_KEY || secrets.GRAFANA2_TOKEN || '',
+              },
+            };
+          }
           servers.clickhouse = { command: 'mcp-clickhouse', args: [], env: secrets };
           servers.gitlab = { command: 'mcp-gitlab', args: [], env: secrets };
         }
